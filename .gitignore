@@ -1,0 +1,14 @@
+node_modules/
+.next/
+.cache/
+.node-gyp/
+.pnpm-store/
+data/
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+.env
+.env.local
+*.log
+*.tsbuildinfo
+.next-dev.*.log
