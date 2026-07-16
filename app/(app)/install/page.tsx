@@ -19,6 +19,7 @@ type Checklist = NonNullable<InstallKitFormValues['checklist']>;
 type PendingInstall = {
   id: string;
   truckId: string | null;
+  truckLabel: string | null;
   motherDeviceId: string | null;
   clientTs: number;
   status: 'pending';
@@ -71,7 +72,10 @@ export default function InstallPage() {
   const [pendingInstalls, setPendingInstalls] = useState<PendingInstall[]>([]);
   const [installHistory, setInstallHistory] = useState<InstallationHistoryItem[]>([]);
   const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historyQuery, setHistoryQuery] = useState('');
   const [currentKit, setCurrentKit] = useState<CurrentTruckKit | null>(null);
+  const [truckQuery, setTruckQuery] = useState('');
+  const [loadedTruckLabel, setLoadedTruckLabel] = useState<string | null>(null);
   const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'error'>('idle');
 
   useEffect(() => {
@@ -93,6 +97,7 @@ export default function InstallPage() {
               return {
                 id: row.id,
                 truckId: typeof payload?.truckId === 'string' ? payload.truckId : null,
+                truckLabel: typeof (payload as { truckLabel?: unknown } | null)?.truckLabel === 'string' ? (payload as { truckLabel: string }).truckLabel : null,
                 motherDeviceId: typeof payload?.motherDeviceId === 'string' ? payload.motherDeviceId : null,
                 clientTs: row.clientTs,
                 status: 'pending' as const,
@@ -134,17 +139,19 @@ export default function InstallPage() {
       return;
     }
 
-    const outcome = await submitInstallation(form);
+    const outcome = await submitInstallation({ ...form, truckLabel: truckDisplayLabel } as InstallKitFormValues & { truckLabel: string });
     setResult(outcome);
     if (outcome.status === 'queued') {
       setForm(emptyForm);
       setCurrentKit(null);
+      setTruckQuery('');
+      setLoadedTruckLabel(null);
       setTruckLookupState('idle');
     }
   }
 
   async function loadCurrentTruckKit() {
-    const query = form.truckId.trim();
+    const query = truckQuery.trim();
     if (!query) {
       setResult({ status: 'error', message: 'Enter a truck first.' });
       return;
@@ -161,11 +168,15 @@ export default function InstallPage() {
       const view = payload.data;
       if (!view || view.target.kind !== 'truck' || !view.target.id) {
         setCurrentKit(null);
+        setLoadedTruckLabel(null);
         setTruckLookupState('error');
         setResult({ status: 'error', message: 'Truck was not found. Create or confirm the truck record before install.' });
         return;
       }
       const truckId = view.target.id;
+      const truckLabel = view.target.label;
+      setLoadedTruckLabel(truckLabel);
+      setTruckQuery(truckLabel);
 
       const orderedSubs = subSlots
         .map((slot) => view.kit.subs.find((sub) => sub.slot === slot))
@@ -178,7 +189,7 @@ export default function InstallPage() {
       if (view.kit.mother && orderedSubs.length === 3) {
         const nextKit: CurrentTruckKit = {
           truckId,
-          truckLabel: view.target.label,
+          truckLabel,
           mother: view.kit.mother,
           subs: orderedSubs,
         };
@@ -207,6 +218,7 @@ export default function InstallPage() {
       }));
     } catch {
       setCurrentKit(null);
+      setLoadedTruckLabel(null);
       setTruckLookupState('error');
       setResult({ status: 'error', message: 'Could not load the truck assignment. Try again or scan the changed kit.' });
     }
@@ -251,18 +263,33 @@ export default function InstallPage() {
       form.checklist?.sublocksResponsive &&
       form.checklist?.overallStatus,
   );
+  const truckDisplayLabel = displayTruckLabel(currentKit?.truckLabel, loadedTruckLabel, truckQuery, form.truckId);
+  const motherDisplayLabel =
+    displayDeviceLabel(currentKit?.mother.serial, form.motherDeviceId) || (form.motherDeviceId ? 'Mother selected' : 'Not set');
+  const subLocksDisplayLabel = displaySubLockLabel(currentKit, form.subDeviceIds);
+  const filteredInstallHistory = useMemo(
+    () => filterRows(installHistory, historyQuery, (item) => [
+      item.truckLabel,
+      item.motherSerial,
+      item.subSerials.join(' '),
+      item.overallStatus ?? '',
+      item.actorName ?? '',
+      formatTimestamp(item.loggedDate),
+    ]),
+    [installHistory, historyQuery],
+  );
 
   const statusItems = useMemo(
     () => [
-      { label: 'Truck', value: form.truckId || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
+      { label: 'Truck', value: truckDisplayLabel || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
       {
         label: 'Mother lock',
-        value: form.motherDeviceId || 'Not set',
+        value: motherDisplayLabel,
         tone: form.motherDeviceId ? ('muted' as const) : ('danger' as const),
       },
       {
         label: 'Sub-locks (B C D)',
-        value: form.subDeviceIds.every(Boolean) ? 'All set' : 'Not set',
+        value: subLocksDisplayLabel,
         tone: form.subDeviceIds.every(Boolean) ? ('muted' as const) : ('danger' as const),
       },
       {
@@ -286,7 +313,7 @@ export default function InstallPage() {
         tone: result.status === 'queued' ? ('ok' as const) : result.status === 'error' ? ('danger' as const) : ('muted' as const),
       },
     ],
-    [checklistComplete, form, result.status, sameKitMode],
+    [checklistComplete, form, motherDisplayLabel, result.status, sameKitMode, subLocksDisplayLabel, truckDisplayLabel],
   );
 
   return (
@@ -294,7 +321,7 @@ export default function InstallPage() {
       <div className="lookup-cockpit__header">
         <div>
           <h1>Install</h1>
-          <p>{form.truckId ? `Daily install event for ${currentKit?.truckLabel ?? form.truckId}` : 'Truck-first daily installation workflow'}</p>
+          <p>{form.truckId ? `Daily install event for ${truckDisplayLabel || 'loaded truck'}` : 'Truck-first daily installation workflow'}</p>
         </div>
         <Badge tone={pendingInstalls.length > 0 ? 'warning' : 'muted'}>{pendingInstalls.length} pending</Badge>
       </div>
@@ -317,18 +344,20 @@ export default function InstallPage() {
             <label>
               <span>Truck</span>
               <input
-                value={form.truckId}
+                value={truckQuery}
                 onChange={(event) => {
+                  setTruckQuery(event.target.value);
+                  setLoadedTruckLabel(null);
                   setForm({
                     ...form,
-                    truckId: event.target.value,
+                    truckId: '',
                     installMode: 'changed',
                     company: '' as InstallKitFormValues['company'],
                   });
                   setCurrentKit(null);
                   setTruckLookupState('idle');
                 }}
-                placeholder="Enter plate or truck ID"
+                placeholder="Enter truck plate"
                 required
               />
             </label>
@@ -368,7 +397,7 @@ export default function InstallPage() {
             {sameKitMode && currentKit ? (
               <StatusList
                 items={[
-                  { label: 'Truck', value: currentKit.truckLabel, tone: 'ok' },
+                  { label: 'Truck', value: displayTruckLabel(currentKit.truckLabel, form.truckId) || 'Loaded truck', tone: 'ok' },
                   { label: 'Mother lock', value: currentKit.mother.serial, tone: 'ok' },
                   { label: 'Sub-lock B', value: currentKit.subs[0]?.serial ?? '-', tone: currentKit.subs[0] ? 'ok' : 'danger' },
                   { label: 'Sub-lock C', value: currentKit.subs[1]?.serial ?? '-', tone: currentKit.subs[1] ? 'ok' : 'danger' },
@@ -483,8 +512,8 @@ export default function InstallPage() {
               columns={['Time', 'Truck', 'Mother', 'Status']}
               rows={pendingInstalls.map((item) => [
                 formatClientTimestamp(item.clientTs),
-                item.truckId ?? '-',
-                item.motherDeviceId ?? '-',
+                item.truckLabel ?? humanTruckValue(item.truckId),
+                displayDeviceLabel(item.motherDeviceId) || (item.motherDeviceId ? 'Mother selected' : '-'),
                 item.status,
               ])}
               emptyLabel="No queued installations on this device."
@@ -492,11 +521,19 @@ export default function InstallPage() {
             />
           </Panel>
 
-          <Panel title="Installation history" action={<Badge tone="muted">{installHistory.length}</Badge>}>
+          <Panel title="Installation history" className="table-workbench" action={<Badge tone="muted">{filteredInstallHistory.length} of {installHistory.length}</Badge>}>
             {historyError && <p className="banner banner--error">{historyError}</p>}
+            <label>
+              <span>Search installation history</span>
+              <input
+                value={historyQuery}
+                onChange={(event) => setHistoryQuery(event.target.value)}
+                placeholder="Truck, mother, sub-lock, status, or installer"
+              />
+            </label>
             <DataTable
               columns={['Installed', 'Truck', 'Mother', 'Sub-locks', 'Status', 'By']}
-              rows={installHistory.map((item) => [
+              rows={filteredInstallHistory.map((item) => [
                 formatTimestamp(item.loggedDate),
                 item.truckLabel,
                 item.motherSerial,
@@ -523,6 +560,60 @@ export default function InstallPage() {
       </form>
     </main>
   );
+}
+
+function filterRows<T>(rows: T[], query: string, fields: (row: T) => string[]): T[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return rows;
+  return rows.filter((row) => {
+    const haystack = fields(row).join(' ').toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
+}
+
+function humanTruckValue(value: string | null | undefined): string {
+  if (!value) return '-';
+  return value.startsWith('trk_') ? 'Loaded truck' : value;
+}
+
+function displayTruckLabel(...values: Array<string | null | undefined>): string {
+  let hasInternalId = false;
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('trk_')) {
+      hasInternalId = true;
+      continue;
+    }
+    return trimmed;
+  }
+  return hasInternalId ? 'Loaded truck' : '';
+}
+
+function displayDeviceLabel(...values: Array<string | null | undefined>): string {
+  let hasInternalId = false;
+  for (const value of values) {
+    const trimmed = value?.trim();
+    if (!trimmed) continue;
+    if (isInternalDeviceId(trimmed)) {
+      hasInternalId = true;
+      continue;
+    }
+    return trimmed;
+  }
+  return hasInternalId ? 'Selected device' : '';
+}
+
+function displaySubLockLabel(currentKit: CurrentTruckKit | null, subDeviceIds: InstallKitFormValues['subDeviceIds']): string {
+  if (currentKit?.subs.length) {
+    return currentKit.subs.map((sub) => sub.serial).filter(Boolean).join(' / ');
+  }
+  if (!subDeviceIds.every(Boolean)) return 'Not set';
+  return subDeviceIds.some((value) => isInternalDeviceId(value)) ? 'All set' : subDeviceIds.join(' / ');
+}
+
+function isInternalDeviceId(value: string): boolean {
+  return value.startsWith('dev_');
 }
 
 function formatClientTimestamp(value: number): string {

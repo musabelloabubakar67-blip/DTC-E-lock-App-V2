@@ -199,7 +199,7 @@ export default function LookupPage() {
                 <input
                   value={query}
                   onChange={(event) => setQuery(event.target.value)}
-                  placeholder="Plate, truck ID, mother serial, or device ID"
+                  placeholder="Truck plate, mother serial, or device serial"
                 />
               </label>
               <button className="btn btn--primary" type="submit">

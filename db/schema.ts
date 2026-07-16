@@ -55,6 +55,9 @@ export const devices = sqliteTable(
     registeredAt: integer('registered_at'),
     registeredBy: text('registered_by').references(() => users.id),
     importUnverified: integer('import_unverified').notNull().default(0), // set for every migrated device
+    ownershipStatus: text('ownership_status', { enum: ['owned', 'released_external'] }).notNull().default('owned'),
+    ownershipNotes: text('ownership_notes'),
+    ownershipUpdatedAt: integer('ownership_updated_at'),
     // Queryable provenance (§3 mismatch flow): 'discovered' = created inline during a
     // verification mismatch correction (an already-mounted, never-registered device found by
     // scan). Everything else — registerKit, migration import — is 'registered'.

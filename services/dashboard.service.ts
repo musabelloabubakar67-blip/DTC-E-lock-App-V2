@@ -1,9 +1,10 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import {
   auditLog,
   conflictReviews,
   devices,
   registrationLogs,
+  truckAssignments,
   trucks,
   users,
 } from '../db/schema';
@@ -56,11 +57,13 @@ export function getDashboard(db: DbClient, input: { orgId: string; role: 'instal
     id: string;
     deviceType: 'mother' | 'sub';
     lifecycleStatus: 'available' | 'in_service' | 'repair' | 'faulty' | 'retired';
+    ownershipStatus: 'owned' | 'released_external';
   }>;
   const allTrucks = db
     .select({ id: trucks.id })
     .from(trucks)
-    .where(and(eq(trucks.orgId, input.orgId), eq(trucks.isActive, 1)))
+    .innerJoin(truckAssignments, eq(truckAssignments.truckId, trucks.id))
+    .where(and(eq(trucks.orgId, input.orgId), eq(trucks.isActive, 1), isNull(truckAssignments.removedAt)))
     .all() as Array<{ id: string }>;
   const reviews = listOpenReviewsForOrg(db, input.orgId);
   const repairPool = listRepairPool(db, input.orgId);
@@ -78,7 +81,7 @@ export function getDashboard(db: DbClient, input: { orgId: string; role: 'instal
     registeredKits,
     openReviews: reviews.length,
     pendingRepair: repairPool.length,
-    availableMothers: allDevices.filter((device) => device.deviceType === 'mother' && device.lifecycleStatus === 'available').length,
+    availableMothers: allDevices.filter((device) => device.deviceType === 'mother' && device.lifecycleStatus === 'available' && device.ownershipStatus === 'owned').length,
     inServiceMothers: allDevices.filter((device) => device.deviceType === 'mother' && device.lifecycleStatus === 'in_service').length,
     faultyDevices: allDevices.filter((device) => device.lifecycleStatus === 'faulty').length,
     retiredDevices: allDevices.filter((device) => device.lifecycleStatus === 'retired').length,

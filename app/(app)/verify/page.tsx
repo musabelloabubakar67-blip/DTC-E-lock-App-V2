@@ -91,7 +91,7 @@ export default function VerifyPage() {
 
     const outcome = await submitVerification(values);
     setResult(outcome);
-    if (outcome.status === 'queued') {
+    if (outcome.status === 'queued' || outcome.status === 'applied') {
       setTruckId('');
       setMother(emptySub);
       setSubs([{ ...emptySub }, { ...emptySub }, { ...emptySub }]);
@@ -109,8 +109,8 @@ export default function VerifyPage() {
       <Panel title="Kit scan">
         <form onSubmit={handleSubmit}>
           <label>
-            <span>Truck ID (optional — omit for a depot/off-truck check)</span>
-            <input value={truckId} onChange={(e) => setTruckId(e.target.value)} placeholder="Truck ID" />
+            <span>Truck plate (optional — omit for a depot/off-truck check)</span>
+            <input value={truckId} onChange={(e) => setTruckId(e.target.value)} placeholder="FZE998DI" />
           </label>
 
           <SourcedInput label="Mother lock" field={mother} onChange={setMother} required />
@@ -125,7 +125,12 @@ export default function VerifyPage() {
         </form>
       </Panel>
 
-      {result.status === 'queued' && <p className="banner banner--ok">Saved on device — pending sync.</p>}
+      {result.status === 'applied' && (
+        <p className="banner banner--ok">
+          {result.matched ? 'Verified against the current registry.' : 'Verified and corrected against physical reality. Matching reviews were updated.'}
+        </p>
+      )}
+      {result.status === 'queued' && <p className="banner banner--ok">Saved on device - pending sync.</p>}
       {result.status === 'error' && <p className="banner banner--error">{`Error: ${result.message}`}</p>}
     </main>
   );

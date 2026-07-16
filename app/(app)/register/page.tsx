@@ -27,6 +27,8 @@ type RegistrationListItem = {
   simNumber: string | null;
   source: 'app' | 'import';
   actorName: string | null;
+  ownershipStatus: 'owned' | 'released_external' | 'mixed';
+  ownershipNotes: string | null;
 };
 
 type ConfigKey = keyof Pick<
@@ -49,10 +51,24 @@ export default function RegisterPage() {
   const [kitList, setKitList] = useState<KitListEntry[]>([]);
   const [registryRows, setRegistryRows] = useState<RegistrationListItem[]>([]);
   const [registryError, setRegistryError] = useState<string | null>(null);
+  const [registryQuery, setRegistryQuery] = useState('');
+  const [ownershipWorkingId, setOwnershipWorkingId] = useState<string | null>(null);
+  const [selectedRegistryIds, setSelectedRegistryIds] = useState<Set<string>>(() => new Set());
+  const [batchWorking, setBatchWorking] = useState(false);
+  const [releaseDraft, setReleaseDraft] = useState<{ registrationIds: string[]; label: string } | null>(null);
+  const [releaseNote, setReleaseNote] = useState('');
 
   useEffect(() => {
     void loadRegistry();
   }, []);
+
+  useEffect(() => {
+    setSelectedRegistryIds((current) => {
+      const availableIds = new Set(registryRows.map((row) => row.id));
+      const next = new Set([...current].filter((id) => availableIds.has(id)));
+      return next.size === current.size ? current : next;
+    });
+  }, [registryRows]);
 
   async function loadRegistry() {
     try {
@@ -76,6 +92,79 @@ export default function RegisterPage() {
     if (result.status === 'success') {
       await loadRegistry();
     }
+  }
+
+  async function submitOwnershipUpdate(
+    registrationIds: string[],
+    ownershipStatus: 'owned' | 'released_external',
+    notes: string,
+  ) {
+    if (registrationIds.length === 0) return;
+    setOwnershipWorkingId(registrationIds.length === 1 ? registrationIds[0] : null);
+    setBatchWorking(registrationIds.length > 1);
+    setRegistryError(null);
+    try {
+      const response = await fetch('/api/registry/ownership', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ registrationIds, ownershipStatus, notes }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Ownership update failed');
+      setSelectedRegistryIds((current) => {
+        const next = new Set(current);
+        for (const registrationId of registrationIds) next.delete(registrationId);
+        return next;
+      });
+      setReleaseDraft(null);
+      setReleaseNote('');
+      await loadRegistry();
+    } catch (error) {
+      setRegistryError(error instanceof Error ? error.message : 'Ownership update failed');
+    } finally {
+      setOwnershipWorkingId(null);
+      setBatchWorking(false);
+    }
+  }
+
+  function updateOwnership(row: RegistrationListItem, ownershipStatus: 'owned' | 'released_external') {
+    if (ownershipStatus === 'released_external') {
+      setReleaseDraft({ registrationIds: [row.id], label: row.motherSerial });
+      setReleaseNote(row.ownershipNotes ?? '');
+      return;
+    }
+    void submitOwnershipUpdate([row.id], 'owned', '');
+  }
+
+  function updateSelectedOwnership(ownershipStatus: 'owned' | 'released_external') {
+    const registrationIds = [...selectedRegistryIds];
+    if (registrationIds.length === 0) return;
+    if (ownershipStatus === 'released_external') {
+      setReleaseDraft({ registrationIds, label: `${registrationIds.length} selected kit(s)` });
+      setReleaseNote('');
+      return;
+    }
+    void submitOwnershipUpdate(registrationIds, 'owned', '');
+  }
+
+  function toggleRegistrySelection(id: string, checked: boolean) {
+    setSelectedRegistryIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
+  }
+
+  function selectVisibleRegistryRows() {
+    setSelectedRegistryIds((current) => {
+      const next = new Set(current);
+      for (const row of filteredRegistryRows) next.add(row.id);
+      return next;
+    });
   }
 
   function handleAddToKitList() {
@@ -114,6 +203,19 @@ export default function RegisterPage() {
   const pendingCount = kitList.filter((entry) => entry.result.status === 'pending').length;
   const successCount = kitList.filter((entry) => entry.result.status === 'success').length;
   const errorCount = kitList.filter((entry) => entry.result.status === 'error').length;
+  const filteredRegistryRows = useMemo(
+    () => filterRows(registryRows, registryQuery, (row) => [
+      row.motherSerial,
+      row.subSerials.join(' '),
+      row.simNumber ?? '',
+      row.actorName ?? '',
+      row.source,
+      ownershipLabel(row),
+      row.ownershipNotes ?? '',
+      formatTimestamp(row.loggedDate),
+    ]),
+    [registryRows, registryQuery],
+  );
 
   const statusItems = useMemo(
     () => [
@@ -281,16 +383,88 @@ export default function RegisterPage() {
             />
           </Panel>
 
-          <Panel title="Registered kits">
+          <Panel title="Registered kits" className="table-workbench" action={<Badge tone="muted">{filteredRegistryRows.length} of {registryRows.length}</Badge>}>
             {registryError && <p className="banner banner--error">{registryError}</p>}
+            <label>
+              <span>Search registered kits</span>
+              <input
+                value={registryQuery}
+                onChange={(event) => setRegistryQuery(event.target.value)}
+                placeholder="Mother, sub-lock, SIM, source, or installer"
+              />
+            </label>
+            <div className="registry-batch-bar">
+              <Badge tone={selectedRegistryIds.size > 0 ? 'warning' : 'muted'}>{selectedRegistryIds.size} selected</Badge>
+              <button className="btn btn--secondary btn--compact" type="button" onClick={selectVisibleRegistryRows} disabled={batchWorking || filteredRegistryRows.length === 0}>
+                Select visible
+              </button>
+              <button className="btn btn--secondary btn--compact" type="button" onClick={() => setSelectedRegistryIds(new Set())} disabled={batchWorking || selectedRegistryIds.size === 0}>
+                Clear
+              </button>
+              <button className="btn btn--secondary btn--compact" type="button" onClick={() => void updateSelectedOwnership('released_external')} disabled={batchWorking || selectedRegistryIds.size === 0}>
+                Batch release
+              </button>
+              <button className="btn btn--secondary btn--compact" type="button" onClick={() => void updateSelectedOwnership('owned')} disabled={batchWorking || selectedRegistryIds.size === 0}>
+                Restore selected
+              </button>
+            </div>
+            {releaseDraft && (
+              <div className="registry-release-note">
+                <label>
+                  <span>Release note for {releaseDraft.label}</span>
+                  <textarea
+                    value={releaseNote}
+                    onChange={(event) => setReleaseNote(event.target.value)}
+                    placeholder="Company, handover reference, or reason this kit is no longer available to DTC"
+                  />
+                </label>
+                <div className="registry-batch-bar">
+                  <button
+                    className="btn btn--primary btn--compact"
+                    type="button"
+                    disabled={batchWorking || Boolean(ownershipWorkingId)}
+                    onClick={() => void submitOwnershipUpdate(releaseDraft.registrationIds, 'released_external', releaseNote)}
+                  >
+                    Confirm release
+                  </button>
+                  <button
+                    className="btn btn--secondary btn--compact"
+                    type="button"
+                    disabled={batchWorking || Boolean(ownershipWorkingId)}
+                    onClick={() => {
+                      setReleaseDraft(null);
+                      setReleaseNote('');
+                    }}
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
             <DataTable
-              columns={['Registered', 'Mother', 'Sub-locks', 'SIM', 'By']}
-              rows={registryRows.map((row) => [
+              columns={['Pick', 'Registered', 'Mother', 'Sub-locks', 'SIM', 'Ownership', 'By', 'Action']}
+              rows={filteredRegistryRows.map((row) => [
+                <input
+                  aria-label={`Select ${row.motherSerial}`}
+                  checked={selectedRegistryIds.has(row.id)}
+                  disabled={batchWorking || ownershipWorkingId === row.id}
+                  type="checkbox"
+                  onChange={(event) => toggleRegistrySelection(row.id, event.target.checked)}
+                />,
                 formatTimestamp(row.loggedDate),
                 row.motherSerial,
                 row.subSerials.length ? row.subSerials.join(' / ') : '-',
                 row.simNumber ?? '-',
+                ownershipLabel(row),
                 row.actorName ?? row.source,
+                <button
+                  className="btn btn--secondary btn--compact"
+                  disabled={ownershipWorkingId === row.id}
+                  type="button"
+                  onClick={() => updateOwnership(row, row.ownershipStatus === 'released_external' ? 'owned' : 'released_external')}
+                >
+                  {row.ownershipStatus === 'released_external' ? 'Restore' : 'Release'}
+                </button>,
               ])}
               emptyLabel="No registered kits found yet."
             />
@@ -310,6 +484,21 @@ export default function RegisterPage() {
       </form>
     </main>
   );
+}
+
+function ownershipLabel(row: RegistrationListItem): string {
+  if (row.ownershipStatus === 'released_external') return row.ownershipNotes ? `Released - ${row.ownershipNotes}` : 'Released';
+  if (row.ownershipStatus === 'mixed') return 'Mixed ownership';
+  return 'Owned';
+}
+
+function filterRows<T>(rows: T[], query: string, fields: (row: T) => string[]): T[] {
+  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  if (terms.length === 0) return rows;
+  return rows.filter((row) => {
+    const haystack = fields(row).join(' ').toLowerCase();
+    return terms.every((term) => haystack.includes(term));
+  });
 }
 
 function ConfigSelect({

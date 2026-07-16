@@ -75,7 +75,7 @@ export default function SettingsClient({
                 <form className="settings-form settings-form--inline" action={createFormAction}>
                   <label>
                     <span>Display name</span>
-                    <input name="displayName" placeholder="Alex Morgan" required />
+                    <input name="displayName" placeholder="Musa Abubakar" required />
                   </label>
                   <label>
                     <span>Username</span>

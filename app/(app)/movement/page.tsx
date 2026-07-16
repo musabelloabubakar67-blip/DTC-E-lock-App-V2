@@ -157,7 +157,7 @@ export default function MovementPage() {
       { label: 'Action', value: selectedAction.label, tone: 'muted' as const },
       {
         label: 'Truck',
-        value: truckId || toTruckId || 'Not set',
+        value: humanTruckValue(truckId || toTruckId) || 'Not set',
         tone: truckId || toTruckId ? ('muted' as const) : ('danger' as const),
       },
       {
@@ -225,8 +225,8 @@ export default function MovementPage() {
           <Panel title="Movement details">
             {(kind === 'new_assignment' || kind === 'mother_replacement' || kind === 'sub_replacement') && (
               <label>
-                <span>Truck ID</span>
-                <input value={truckId} onChange={(event) => setTruckId(event.target.value)} placeholder="Enter truck ID" />
+                <span>Truck plate</span>
+                <input value={truckId} onChange={(event) => setTruckId(event.target.value)} placeholder="Enter truck plate" />
               </label>
             )}
 
@@ -277,8 +277,8 @@ export default function MovementPage() {
 
             {kind === 'truck_swap' && (
               <label>
-                <span>To truck ID</span>
-                <input value={toTruckId} onChange={(event) => setToTruckId(event.target.value)} placeholder="Destination truck ID" />
+                <span>To truck plate</span>
+                <input value={toTruckId} onChange={(event) => setToTruckId(event.target.value)} placeholder="Destination truck plate" />
               </label>
             )}
 
@@ -370,7 +370,7 @@ export default function MovementPage() {
               rows={pendingMovements.map((item) => [
                 formatClientTimestamp(item.clientTs),
                 formatOption(item.kind) || '-',
-                item.truckId ?? '-',
+                humanTruckValue(item.truckId),
                 item.deviceId ?? '-',
                 item.status,
               ])}
@@ -392,6 +392,11 @@ export default function MovementPage() {
       </form>
     </main>
   );
+}
+
+function humanTruckValue(value: string | null | undefined): string {
+  if (!value) return '-';
+  return value.startsWith('trk_') ? 'Loaded truck' : value;
 }
 
 function actionNeedsReason(kind: ActionKind): boolean {

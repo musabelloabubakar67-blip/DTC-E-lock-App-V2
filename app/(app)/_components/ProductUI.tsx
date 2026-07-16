@@ -2,6 +2,18 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import {
+  AlertTriangle,
+  ClipboardCheck,
+  Keyboard,
+  ListChecks,
+  PackagePlus,
+  QrCode,
+  Search,
+  ShieldCheck,
+  Truck,
+  Wrench,
+} from 'lucide-react';
 import { CameraScanner } from '../../../lib/qr/scanner';
 
 type PanelProps = {
@@ -238,7 +250,7 @@ export function DataTable({
   return (
     <div className="data-table-shell">
       <div className="data-table-wrap">
-        <table className="data-table">
+        <table className="data-table" data-columns={columns.length}>
           <thead>
             <tr>
               {columns.map((column) => (
@@ -329,73 +341,31 @@ function primaryPayloadLine(payload: unknown): string {
   const observed = typeof data.observedMotherSerial === 'string' ? data.observedMotherSerial : null;
   const expected = typeof data.expectedMotherSerial === 'string' ? data.expectedMotherSerial : null;
   const error = typeof data.error === 'string' ? data.error : null;
+  const truckLabel = typeof data.truckLabel === 'string' ? data.truckLabel : null;
+  const truckDisplay = truckLabel ?? (truckId?.startsWith('trk_') ? 'Truck' : truckId);
 
-  if (truckId && observed) return `${truckId} observed ${observed}`;
+  if (truckDisplay && observed) return `${truckDisplay} observed ${observed}`;
   if (expected && observed) return `${expected} -> ${observed}`;
   if (error) return error;
   return 'Review details available';
 }
 
 function ButtonIcon({ name }: { name: 'scan' | 'manual' }) {
-  return (
-    <svg className="btn__icon" viewBox="0 0 24 24" aria-hidden="true">
-      {name === 'scan' ? (
-        <>
-          <path d="M5 8V5h3M16 5h3v3M19 16v3h-3M8 19H5v-3" />
-          <path d="M9 9h2v2H9zM13 9h2v2h-2zM9 13h2v2H9zM14 14h1v1h-1z" />
-        </>
-      ) : (
-        <>
-          <path d="M5 7h14v10H5z" />
-          <path d="M8 10h8M8 14h5" />
-        </>
-      )}
-    </svg>
-  );
+  const Icon = name === 'scan' ? QrCode : Keyboard;
+  return <Icon className="btn__icon" strokeWidth={1.9} aria-hidden="true" />;
 }
 
 function ActionIcon({ label }: { label: string }) {
-  const key = label.toLowerCase();
-  return (
-    <svg className="action-tile__icon" viewBox="0 0 24 24" aria-hidden="true">
-      {key === 'register' && (
-        <>
-          <path d="M8 4h8l2 2v14H6V6z" />
-          <path d="M9 10h6M9 14h4M17 12h4M19 10v4" />
-        </>
-      )}
-      {key === 'install' && <path d="m14 4 6 6-4 4-2-2-6 6-4-4 6-6-2-2z" />}
-      {key === 'fault' && (
-        <>
-          <path d="M12 4 21 20H3z" />
-          <path d="M12 9v5M12 17h.01" />
-        </>
-      )}
-      {key === 'movement' && (
-        <>
-          <path d="M3 7h11v9H3zM14 10h4l3 3v3h-7z" />
-          <path d="M7 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4ZM18 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z" />
-        </>
-      )}
-      {key === 'lookup' && (
-        <>
-          <circle cx="11" cy="11" r="6" />
-          <path d="m16 16 5 5" />
-        </>
-      )}
-      {key === 'verify' && (
-        <>
-          <path d="M12 3 20 7v6c0 4-3 7-8 8-5-1-8-4-8-8V7z" />
-          <path d="m9 12 2 2 4-4" />
-        </>
-      )}
-      {key === 'review' && (
-        <>
-          <path d="M7 4h10v16H7z" />
-          <path d="M9 9h6M9 13h6" />
-        </>
-      )}
-      {key === 'triage' && <path d="M12 3 20 7v6c0 4-3 7-8 8-5-1-8-4-8-8V7z" />}
-    </svg>
-  );
+  const icons = {
+    register: PackagePlus,
+    install: Wrench,
+    fault: AlertTriangle,
+    movement: Truck,
+    lookup: Search,
+    verify: ShieldCheck,
+    review: ClipboardCheck,
+    triage: ListChecks,
+  } as const;
+  const Icon = icons[label.toLowerCase() as keyof typeof icons] ?? ListChecks;
+  return <Icon className="action-tile__icon" strokeWidth={1.9} aria-hidden="true" />;
 }

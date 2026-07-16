@@ -16,7 +16,6 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../../lib/auth';
 import { db } from '../../db';
 import { getDashboard } from '../../services/dashboard.service';
-import { formatTimestamp } from './_components/ProductUI';
 
 const INSTALLER_ACTIONS = [
   { href: '/lookup', label: 'Lookup', icon: 'lookup' },
@@ -40,7 +39,7 @@ export default async function HomePage() {
   const actions = role === 'supervisor' ? [...INSTALLER_ACTIONS, ...SUPERVISOR_ACTIONS] : INSTALLER_ACTIONS;
   const needsAttention = dashboard.counts.openReviews > 0;
   const needsVerification = dashboard.trust.stale + dashboard.trust.unverified;
-  const totalAssets = dashboard.counts.trucks + dashboard.counts.inServiceMothers + dashboard.counts.availableMothers;
+  const totalAssets = dashboard.counts.registeredKits;
   const utilization = totalAssets ? Math.round((dashboard.counts.inServiceMothers / totalAssets) * 100) : 0;
 
   const metrics = [
@@ -58,7 +57,7 @@ export default async function HomePage() {
           <h1>Dashboard</h1>
           <span>{role === 'supervisor' ? 'Supervisor operations cockpit' : 'Field operations cockpit'}</span>
         </div>
-        <span className="dd__attention-pill">{needsAttention ? 'Needs attention' : 'All clear'}</span>
+        <span className="dd__attention-pill" data-active={needsAttention}>{needsAttention ? 'Needs attention' : 'All clear'}</span>
       </header>
 
       <section className="dd-alert" data-active={needsAttention}>
@@ -67,7 +66,7 @@ export default async function HomePage() {
           <strong>{needsAttention ? `${dashboard.counts.openReviews} reviews need attention` : 'Operations are clear'}</strong>
           <span>{needsAttention ? 'Items are waiting for your review and decision.' : 'No critical review items are currently open.'}</span>
         </div>
-        <Link href={needsAttention ? '/review' : '/lookup'}>{needsAttention ? 'Open review' : 'Run lookup'}<b>›</b></Link>
+        <Link href={needsAttention ? '/review' : '/lookup'}>{needsAttention ? 'Open review' : 'Run lookup'}<b>&gt;</b></Link>
       </section>
 
       <section className="dd-metrics" aria-label="Operational summary">
@@ -77,7 +76,7 @@ export default async function HomePage() {
             <div>
               <span>{metric.label}</span>
               <strong>{metric.value.toLocaleString()}</strong>
-              <small>{metric.value > 0 ? '↑ Live operational count' : 'No current items'}</small>
+              <small>{metric.value > 0 ? 'Live operational count' : 'No current items'}</small>
             </div>
           </article>
         ))}
@@ -112,8 +111,8 @@ export default async function HomePage() {
 
           <section className="dd-panel">
             <PanelTitle title="Fleet state" icon="movement" />
-            <ValueRow label="Total assets" value={totalAssets} />
-            <ValueRow label="Active assets" value={dashboard.counts.inServiceMothers} tone="ok" />
+            <ValueRow label="Registered kits" value={totalAssets} />
+            <ValueRow label="In-service kits" value={dashboard.counts.inServiceMothers} tone="ok" />
             <ValueRow label="Available mothers" value={dashboard.counts.availableMothers} />
             <ValueRow label="Faulty devices" value={dashboard.counts.faultyDevices} tone="warning" />
             <ValueRow label="Utilization" value={`${utilization}%`} tone="ok" />
@@ -130,7 +129,7 @@ export default async function HomePage() {
                 <div className="dd-feed__row" key={`${row.motherSerial}-${row.loggedDate}`}>
                   <UiIcon name="kit" />
                   <div><strong>{row.motherSerial}</strong><span>{row.subSerials.length ? `Sub-locks: ${row.subSerials.join(' / ')}` : 'No sub-locks recorded'}</span></div>
-                  <small>{formatTimestamp(row.loggedDate)}<br />{row.actorName ?? row.source}</small>
+                  <small>{formatDashboardTimestamp(row.loggedDate)}<br />{row.actorName ?? row.source}</small>
                 </div>
               ))}
             </div>
@@ -144,7 +143,7 @@ export default async function HomePage() {
                 <div className="dd-feed__row" key={row.id}>
                   <UiIcon name="verify" />
                   <div><strong>{row.summary}</strong><span>{row.entityTable}</span></div>
-                  <small>{formatTimestamp(row.createdAt)}<br />{row.actorName ?? '-'}</small>
+                  <small>{formatDashboardTimestamp(row.createdAt)}<br />{row.actorName ?? '-'}</small>
                 </div>
               ))}
             </div>
@@ -160,7 +159,7 @@ export default async function HomePage() {
                 <div className="dd-feed__row dd-feed__row--alert" key={review.id}>
                   <UiIcon name="fault" />
                   <div><strong>Review: {review.kind.replaceAll('_', ' ')}</strong><span>Decision required</span></div>
-                  <small>{formatTimestamp(review.createdAt)}</small>
+                  <small>{formatDashboardTimestamp(review.createdAt)}</small>
                 </div>
               ))}
             </div>
@@ -189,7 +188,7 @@ function PanelTitle({ title, href, icon }: { title: string; href?: string; icon?
 }
 
 function PanelFooter({ href, label }: { href: string; label: string }) {
-  return <Link className="dd-panel__footer" href={href}>{label}<span>›</span></Link>;
+  return <Link className="dd-panel__footer" href={href}>{label}<span>&gt;</span></Link>;
 }
 
 function ValueRow({ label, value, tone = 'muted' }: { label: string; value: React.ReactNode; tone?: 'muted' | 'ok' | 'warning' | 'danger' }) {
@@ -198,6 +197,16 @@ function ValueRow({ label, value, tone = 'muted' }: { label: string; value: Reac
 
 function Empty({ label }: { label: string }) {
   return <p className="dd-empty">{label}</p>;
+}
+
+function formatDashboardTimestamp(unixSeconds: number | null): string {
+  if (!unixSeconds) return '-';
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(unixSeconds * 1000));
 }
 
 function UiIcon({ name }: { name: string }) {

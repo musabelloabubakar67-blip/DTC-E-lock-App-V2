@@ -93,6 +93,58 @@ describe('installation.service', () => {
     ]);
   });
 
+  it('does not multiply historical sub-locks when duplicate snapshot pairings share a timestamp', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'DUP123AB');
+
+    const kit = registerKit(db, {
+      orgId,
+      actorUserId: installerId,
+      motherSerial: 'DUP-MOTHER',
+      subSerials: ['DUP-SUB-B', 'DUP-SUB-C', 'DUP-SUB-D'],
+      simNumber: '2348033333333',
+    });
+
+    const result = installKit(db, {
+      orgId,
+      actorUserId: installerId,
+      truckId,
+      motherDeviceId: kit.motherDeviceId,
+      subDeviceIds: kit.subDeviceIds as [string, string, string],
+      checklist: { overallStatus: 'successful' },
+      company: 'mrs',
+    });
+
+    const assignment = db.select().from(truckAssignments).where(eq(truckAssignments.id, result.assignmentId)).get()!;
+    for (let duplicateIndex = 0; duplicateIndex < 2; duplicateIndex += 1) {
+      for (const [index, subDeviceId] of kit.subDeviceIds.entries()) {
+        db.insert(slotPairings)
+          .values({
+            id: `duplicate-slot-${duplicateIndex}-${index}`,
+            orgId,
+            motherDeviceId: kit.motherDeviceId,
+            slot: (['B', 'C', 'D'] as const)[index],
+            subDeviceId,
+            pairedAt: assignment.assignedAt,
+            pairedBy: installerId,
+            unpairedAt: assignment.assignedAt,
+            unpairedBy: installerId,
+          })
+          .run();
+      }
+    }
+
+    const history = listInstallationHistory(db, orgId);
+
+    expect(history[0]).toEqual(
+      expect.objectContaining({
+        id: result.installationLogId,
+        subSerials: ['DUP-SUB-B', 'DUP-SUB-C', 'DUP-SUB-D'],
+      }),
+    );
+  });
+
   it('records a same-kit daily install without creating a new assignment', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);

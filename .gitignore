@@ -12,3 +12,6 @@ data/
 *.log
 *.tsbuildinfo
 .next-dev.*.log
+.agents/
+.hallmark/
+skills-lock.json

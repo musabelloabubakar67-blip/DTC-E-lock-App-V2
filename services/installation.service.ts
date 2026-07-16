@@ -98,6 +98,9 @@ function recordSameKitInstallation(db: DbClient, input: InstallKitInput): Instal
   if (mother.deviceType !== 'mother') {
     throw new BusinessError(`Device ${input.motherDeviceId} is not a mother lock`);
   }
+  if (mother.ownershipStatus === 'released_external') {
+    throw new BusinessError(`Mother device ${input.motherDeviceId} has been released externally`);
+  }
 
   const assignment = db
     .select()
@@ -178,9 +181,19 @@ export function installKit(db: DbClient, input: InstallKitInput): InstallKitResu
   if (mother.deviceType !== 'mother') {
     throw new BusinessError(`Device ${input.motherDeviceId} is not a mother lock`);
   }
+  if (mother.ownershipStatus === 'released_external') {
+    throw new BusinessError(`Mother device ${input.motherDeviceId} has been released externally`);
+  }
 
   if (input.subDeviceIds.length !== 3) {
     throw new BusinessError('Exactly 3 sub-lock devices are required (positional B/C/D)');
+  }
+  for (const subDeviceId of input.subDeviceIds) {
+    const sub = db.select().from(devices).where(eq(devices.id, subDeviceId)).get();
+    if (!sub) throw new BusinessError(`Sub-lock device ${subDeviceId} not found`);
+    if (sub.ownershipStatus === 'released_external') {
+      throw new BusinessError(`Sub-lock device ${subDeviceId} has been released externally`);
+    }
   }
 
   // §6 "Company field is ALWAYS shown and ALWAYS required on the install form" — enforced here
@@ -305,7 +318,7 @@ export function installKit(db: DbClient, input: InstallKitInput): InstallKitResu
   });
 }
 
-export function listInstallationHistory(db: DbClient, orgId: string, limit = 60): InstallationHistoryItem[] {
+export function listInstallationHistory(db: DbClient, orgId: string, limit?: number): InstallationHistoryItem[] {
   const rows = (
     db
       .select()
@@ -321,52 +334,100 @@ export function listInstallationHistory(db: DbClient, orgId: string, limit = 60)
       loggedDate: number;
       overallStatus: InstallationChecklist['overallStatus'] | null;
     }>
-  ).slice(0, limit);
+  );
+  const visibleRows = typeof limit === 'number' ? rows.slice(0, limit) : rows;
 
-  return rows.map((row) => {
-    const truck = db
-      .select({ plate: trucks.plate })
-      .from(trucks)
-      .where(eq(trucks.id, row.truckId))
-      .get() as { plate: string } | undefined;
-    const mother = db
-      .select({ serial: devices.serial })
-      .from(devices)
-      .where(eq(devices.id, row.motherDeviceId))
-      .get() as { serial: string } | undefined;
-    const assignment = db
-      .select({ assignedAt: truckAssignments.assignedAt })
-      .from(truckAssignments)
-      .where(eq(truckAssignments.id, row.assignmentId))
-      .get() as { assignedAt: number } | undefined;
-    const subRows = db
-      .select({ subDeviceId: slotPairings.subDeviceId })
-      .from(slotPairings)
-      .where(and(eq(slotPairings.motherDeviceId, row.motherDeviceId), eq(slotPairings.pairedAt, assignment?.assignedAt ?? row.loggedDate)))
-      .all() as Array<{ subDeviceId: string }>;
-    const subSerials = subRows
-      .map((slot) =>
-        db
-          .select({ serial: devices.serial })
-          .from(devices)
-          .where(eq(devices.id, slot.subDeviceId))
-          .get(),
-      )
-      .map((device: { serial: string } | undefined) => device?.serial)
+  const truckRows = db
+    .select({ id: trucks.id, plate: trucks.plate })
+    .from(trucks)
+    .where(eq(trucks.orgId, orgId))
+    .all() as Array<{ id: string; plate: string }>;
+  const plateByTruckId = new Map(truckRows.map((truck) => [truck.id, truck.plate]));
+
+  const deviceRows = db
+    .select({ id: devices.id, serial: devices.serial })
+    .from(devices)
+    .where(eq(devices.orgId, orgId))
+    .all() as Array<{ id: string; serial: string }>;
+  const serialByDeviceId = new Map(deviceRows.map((device) => [device.id, device.serial]));
+
+  const assignmentRows = db
+    .select({ id: truckAssignments.id, assignedAt: truckAssignments.assignedAt })
+    .from(truckAssignments)
+    .where(eq(truckAssignments.orgId, orgId))
+    .all() as Array<{ id: string; assignedAt: number }>;
+  const assignedAtByAssignmentId = new Map(assignmentRows.map((assignment) => [assignment.id, assignment.assignedAt]));
+
+  const slotRows = db
+    .select({ motherDeviceId: slotPairings.motherDeviceId, pairedAt: slotPairings.pairedAt, subDeviceId: slotPairings.subDeviceId })
+    .from(slotPairings)
+    .where(eq(slotPairings.orgId, orgId))
+    .all() as Array<{ motherDeviceId: string; pairedAt: number; subDeviceId: string }>;
+  const subIdsByMotherAndPairedAt = new Map<string, string[]>();
+  for (const slot of slotRows) {
+    const key = `${slot.motherDeviceId}:${slot.pairedAt}`;
+    const current = subIdsByMotherAndPairedAt.get(key) ?? [];
+    current.push(slot.subDeviceId);
+    subIdsByMotherAndPairedAt.set(key, current);
+  }
+
+  const auditRows = db
+    .select({ entityId: auditLog.entityId, afterJson: auditLog.afterJson })
+    .from(auditLog)
+    .where(and(eq(auditLog.orgId, orgId), eq(auditLog.entityTable, 'installation_logs')))
+    .all() as Array<{ entityId: string; afterJson: string }>;
+  const sourceSubsByInstallId = new Map<string, string[]>();
+  for (const audit of auditRows) {
+    const subs = parseInstallSourceSubs(audit.afterJson);
+    if (subs.length > 0 && !sourceSubsByInstallId.has(audit.entityId)) {
+      sourceSubsByInstallId.set(audit.entityId, subs);
+    }
+  }
+
+  const userRows = db
+    .select({ id: users.id, displayName: users.displayName })
+    .from(users)
+    .where(eq(users.orgId, orgId))
+    .all() as Array<{ id: string; displayName: string }>;
+  const actorNameById = new Map(userRows.map((user) => [user.id, user.displayName]));
+
+  return visibleRows.map((row) => {
+    const pairedAt = assignedAtByAssignmentId.get(row.assignmentId) ?? row.loggedDate;
+    const reconstructedSubSerials = (subIdsByMotherAndPairedAt.get(`${row.motherDeviceId}:${pairedAt}`) ?? [])
+      .map((subDeviceId) => serialByDeviceId.get(subDeviceId))
       .filter((serial: string | undefined): serial is string => Boolean(serial));
-    const actor = db.select({ displayName: users.displayName }).from(users).where(eq(users.id, row.actorUserId)).get() as
-      | { displayName: string }
-      | undefined;
+    const subSerials = sourceSubsByInstallId.get(row.id) ?? uniqueStrings(reconstructedSubSerials);
 
     return {
       id: row.id,
       loggedDate: row.loggedDate,
       truckId: row.truckId,
-      truckLabel: truck?.plate ?? row.truckId,
-      motherSerial: mother?.serial ?? row.motherDeviceId,
+      truckLabel: plateByTruckId.get(row.truckId) ?? row.truckId,
+      motherSerial: serialByDeviceId.get(row.motherDeviceId) ?? row.motherDeviceId,
       subSerials,
       overallStatus: row.overallStatus,
-      actorName: actor?.displayName ?? null,
+      actorName: actorNameById.get(row.actorUserId) ?? null,
     };
   });
+}
+
+function parseInstallSourceSubs(afterJson: string): string[] {
+  try {
+    const payload = JSON.parse(afterJson) as { subs?: unknown };
+    if (!Array.isArray(payload.subs)) return [];
+    return uniqueStrings(payload.subs.filter((value): value is string => typeof value === 'string').map((value) => value.trim()).filter(Boolean));
+  } catch {
+    return [];
+  }
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    result.push(value);
+  }
+  return result;
 }

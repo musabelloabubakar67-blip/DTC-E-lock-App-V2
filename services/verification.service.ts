@@ -269,6 +269,102 @@ function pairDeviceIntoSlot(
 
 const SLOTS = ['B', 'C', 'D'] as const;
 
+function sameSerialSet(left: string[], right: string[]): boolean {
+  const a = left.map(normalizeSerial).filter(Boolean).sort();
+  const b = right.map(normalizeSerial).filter(Boolean).sort();
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
+function resolveTruckIdentifier(db: DbClient, orgId: string, truckIdOrPlate?: string): { id: string; plate: string } | null {
+  const raw = truckIdOrPlate?.trim();
+  if (!raw) return null;
+  const byId = db
+    .select({ id: trucks.id, plate: trucks.plate })
+    .from(trucks)
+    .where(and(eq(trucks.orgId, orgId), eq(trucks.id, raw)))
+    .get();
+  if (byId) return byId;
+  const byPlate = db
+    .select({ id: trucks.id, plate: trucks.plate })
+    .from(trucks)
+    .where(and(eq(trucks.orgId, orgId), eq(trucks.plate, normalizeSerial(raw))))
+    .get();
+  return byPlate ?? null;
+}
+
+function closeMatchingImportKitMismatchReview(
+  tx: DbClient,
+  params: {
+    orgId: string;
+    actorUserId: string;
+    truckId?: string;
+    motherSerial: string;
+    observedSubSerials: string[];
+  },
+): void {
+  const truck = resolveTruckIdentifier(tx, params.orgId, params.truckId);
+  if (!truck) return;
+
+  const openReviews = tx
+    .select()
+    .from(conflictReviews)
+    .where(and(eq(conflictReviews.orgId, params.orgId), eq(conflictReviews.kind, 'import_conflict'), eq(conflictReviews.status, 'open')))
+    .all() as Array<{ id: string; status: string; payloadJson: string }>;
+
+  for (const review of openReviews) {
+    let payload: { reason?: string; row?: Record<string, unknown> };
+    try {
+      payload = JSON.parse(review.payloadJson);
+    } catch {
+      continue;
+    }
+
+    if (payload.reason !== 'kit_mismatch_updated_registry') continue;
+    const row = payload.row ?? {};
+    const reviewTruck = typeof row.truck === 'string' ? normalizeSerial(row.truck) : '';
+    const reviewMother = typeof row.mother === 'string' ? normalizeSerial(row.mother) : '';
+    if (reviewTruck !== normalizeSerial(truck.plate) || reviewMother !== normalizeSerial(params.motherSerial)) continue;
+
+    const installSubs = ['install_sub_b', 'install_sub_c', 'install_sub_d'].map((key) => (typeof row[key] === 'string' ? row[key] as string : ''));
+    const registrySubs = ['registry_sub_b', 'registry_sub_c', 'registry_sub_d'].map((key) => (typeof row[key] === 'string' ? row[key] as string : ''));
+    const matchedInstall = sameSerialSet(params.observedSubSerials, installSubs);
+    const matchedRegistry = sameSerialSet(params.observedSubSerials, registrySubs);
+    if (!matchedInstall && !matchedRegistry) continue;
+
+    const now = nowSeconds();
+    const resolutionNotes = matchedInstall
+      ? 'Resolved by kit verification: physical kit matched installation sheet, and active pairing was verified/corrected.'
+      : 'Resolved by kit verification: physical kit matched Updated Registry; installation-sheet mismatch was reviewed.';
+
+    tx.update(conflictReviews)
+      .set({
+        status: 'resolved',
+        resolvedBy: params.actorUserId,
+        resolvedAt: now,
+        resolutionNotes,
+      })
+      .where(eq(conflictReviews.id, review.id))
+      .run();
+
+    writeAudit(tx, {
+      orgId: params.orgId,
+      actorUserId: params.actorUserId,
+      entityTable: 'conflict_reviews',
+      entityId: review.id,
+      operation: 'transition',
+      before: { status: review.status },
+      after: {
+        status: 'resolved',
+        via: 'kit_verification',
+        truck: truck.plate,
+        mother: params.motherSerial,
+        observedSubSerials: params.observedSubSerials,
+        matched: matchedInstall ? 'installation_sheet' : 'updated_registry',
+      },
+    });
+  }
+}
+
 /**
  * Reconciles a mother's sub kit to match what was physically observed. Closes only the slot
  * pairings that are WRONG (their current sub isn't in the observed set); pairings whose sub IS
@@ -599,10 +695,19 @@ function correctKitMismatch(
       },
     });
 
+    closeMatchingImportKitMismatchReview(tx, {
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      truckId: input.truckId,
+      motherSerial: ctx.observedMotherSerial,
+      observedSubSerials,
+    });
+
     // Reality wins and the correction applies immediately, but it is NEVER silent — always
     // surfaces for supervisor review, with no asserted cause (§3, matching the import_conflict
     // convention in §4/§8: preserve both versions, let a human decide what happened).
     const conflictReviewId = createId();
+    const truckForPayload = resolveTruckIdentifier(tx, input.orgId, input.truckId);
     tx.insert(conflictReviews)
       .values({
         id: conflictReviewId,
@@ -610,6 +715,7 @@ function correctKitMismatch(
         kind: 'unlogged_swap',
         payloadJson: JSON.stringify({
           truckId: input.truckId ?? null,
+          truckLabel: truckForPayload?.plate ?? null,
           expectedMotherSerial,
           observedMotherSerial: ctx.observedMotherSerial,
           expectedSubSerials,
@@ -649,6 +755,8 @@ export function recordKitVerification(
   db: DbClient,
   input: RecordKitVerificationInput,
 ): RecordKitVerificationResult {
+  const truck = resolveTruckIdentifier(db, input.orgId, input.truckId);
+  const normalizedInput = truck ? { ...input, truckId: truck.id } : input;
   const motherSerial = normalizeSerial(input.motherSerial);
 
   const existingMotherDevice = db
@@ -660,12 +768,12 @@ export function recordKitVerification(
   let expectedMotherDeviceId: string | null = null;
   let truckOpenAssignment: { id: string; truckId: string; deviceId: string } | null = null;
 
-  if (input.truckId) {
+  if (normalizedInput.truckId) {
     truckOpenAssignment =
       db
         .select()
         .from(truckAssignments)
-        .where(and(eq(truckAssignments.truckId, input.truckId), isNull(truckAssignments.removedAt)))
+        .where(and(eq(truckAssignments.truckId, normalizedInput.truckId), isNull(truckAssignments.removedAt)))
         .get() ?? null;
     expectedMotherDeviceId = truckOpenAssignment?.deviceId ?? null;
   }
@@ -675,7 +783,7 @@ export function recordKitVerification(
     (!existingMotherDevice || existingMotherDevice.id !== expectedMotherDeviceId);
 
   if (motherMismatch) {
-    return correctKitMismatch(db, input, {
+    return correctKitMismatch(db, normalizedInput, {
       observedMotherSerial: motherSerial,
       existingMotherDevice: existingMotherDevice ?? null,
       expectedMotherDeviceId,
@@ -697,7 +805,7 @@ export function recordKitVerification(
     expectedSet.size === observedSet.size && [...expectedSet].every((s) => observedSet.has(s));
 
   if (!subsMatch) {
-    return correctKitMismatch(db, input, {
+    return correctKitMismatch(db, normalizedInput, {
       observedMotherSerial: motherSerial,
       existingMotherDevice: existingMotherDevice ?? null,
       expectedMotherDeviceId,
@@ -715,7 +823,7 @@ export function recordKitVerification(
       .values({
         id,
         orgId: input.orgId,
-        truckId: input.truckId ?? null,
+        truckId: normalizedInput.truckId ?? null,
         motherDeviceId: motherDeviceIdForCheck,
         source: weakestTier,
         result: 'match',
@@ -734,6 +842,14 @@ export function recordKitVerification(
       entityId: id,
       operation: 'create',
       after: { motherDeviceId: motherDeviceIdForCheck, result: 'match', weakestTier },
+    });
+
+    closeMatchingImportKitMismatchReview(tx, {
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      truckId: normalizedInput.truckId,
+      motherSerial,
+      observedSubSerials,
     });
 
     return { matched: true, verificationId: id, weakestTier } as const;

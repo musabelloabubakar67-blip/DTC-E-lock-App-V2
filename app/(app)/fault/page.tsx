@@ -143,7 +143,7 @@ export default function FaultPage() {
 
   const statusItems = useMemo(
     () => [
-      { label: 'Truck', value: form.truckId || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
+      { label: 'Truck', value: humanTruckValue(form.truckId) || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
       { label: 'Device', value: form.deviceId || 'Not set', tone: form.deviceId ? ('muted' as const) : ('danger' as const) },
       {
         label: 'Locks affected',
@@ -197,11 +197,11 @@ export default function FaultPage() {
               onChange={(value) => setForm({ ...form, deviceId: value })}
             />
             <label>
-              <span>Truck ID</span>
+              <span>Truck plate</span>
               <input
                 value={form.truckId}
                 onChange={(event) => setForm({ ...form, truckId: event.target.value })}
-                placeholder="Enter truck ID"
+                placeholder="Enter truck plate"
                 required
               />
             </label>
@@ -405,7 +405,7 @@ export default function FaultPage() {
               columns={['Time', 'Truck', 'Device', 'Type', 'Status']}
               rows={pendingFaults.map((item) => [
                 formatClientTimestamp(item.clientTs),
-                item.truckId ?? '-',
+                humanTruckValue(item.truckId),
                 item.deviceId ?? '-',
                 formatOption(item.faultType) || '-',
                 item.status,
@@ -417,6 +417,11 @@ export default function FaultPage() {
       </form>
     </main>
   );
+}
+
+function humanTruckValue(value: string | null | undefined): string {
+  if (!value) return '-';
+  return value.startsWith('trk_') ? 'Loaded truck' : value;
 }
 
 function daysAgo(unixSeconds: number): number {

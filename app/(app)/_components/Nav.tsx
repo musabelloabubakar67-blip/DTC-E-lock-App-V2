@@ -33,17 +33,29 @@ export default function Nav({ role }: { role: NavRole }) {
   const links = role === 'supervisor'
     ? [...INSTALLER_LINKS, ...SUPERVISOR_ONLY_LINKS, SETTINGS_LINK]
     : [...INSTALLER_LINKS, SETTINGS_LINK];
+  const primaryLinks = links.slice(0, 4);
+  const secondaryLinks = links.slice(4);
 
   return (
     <nav className="nav" aria-label="Main navigation" data-more-open={moreOpen}>
-      {links.map((link, index) => (
-        <Link key={link.href} className="nav__link" href={link.href} data-active={pathname === link.href} data-mobile-primary={index < 4} onClick={() => setMoreOpen(false)}>
+      {primaryLinks.map((link) => (
+        <Link key={link.href} className="nav__link" href={link.href} data-active={pathname === link.href} data-mobile-primary="true" onClick={() => setMoreOpen(false)}>
           <span className="nav__icon" aria-hidden="true">
             <NavIcon name={link.icon} />
           </span>
           {link.label}
         </Link>
       ))}
+      <div className="nav__more-panel" aria-hidden={!moreOpen}>
+        {secondaryLinks.map((link) => (
+          <Link key={link.href} className="nav__link" href={link.href} data-active={pathname === link.href} data-mobile-primary="false" onClick={() => setMoreOpen(false)}>
+            <span className="nav__icon" aria-hidden="true">
+              <NavIcon name={link.icon} />
+            </span>
+            {link.label}
+          </Link>
+        ))}
+      </div>
       <button className="nav__more" type="button" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}>
         <span className="nav__more-dots" aria-hidden="true"><i /><i /><i /></span>
         More

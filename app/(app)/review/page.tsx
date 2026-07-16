@@ -76,8 +76,8 @@ export default function ReviewPage() {
       },
       {
         label: 'Action mode',
-        value: 'ACKNOWLEDGE ONLY',
-        tone: 'danger' as const,
+        value: 'REVIEW DECISION',
+        tone: 'muted' as const,
       },
     ],
     [importReviews.length, registryReviews.length, reviews.length, syncReviews.length],
@@ -156,7 +156,7 @@ export default function ReviewPage() {
         </section>
 
         <section className="cockpit-grid__side">
-          <Panel title="Open review table">
+          <Panel title="Open review table" className="table-workbench">
             <DataTable
               columns={['Created', 'Kind', 'Status']}
               rows={reviews.map((review) => [formatTimestamp(review.createdAt), formatKind(review.kind), review.status])}
@@ -167,9 +167,9 @@ export default function ReviewPage() {
           <Panel title="Review rules">
             <StatusList
               items={[
-                { label: 'Resolve', value: 'Acknowledge accepted', tone: 'muted' },
-                { label: 'Dismiss', value: 'Acknowledge no action', tone: 'muted' },
-                { label: 'Registry edits', value: 'Not performed here', tone: 'danger' },
+                { label: 'Resolve', value: 'Reviewed and accepted', tone: 'ok' },
+                { label: 'Dismiss', value: 'Reviewed, no action needed', tone: 'muted' },
+                { label: 'Registry edits', value: 'Use register/install/movement flows', tone: 'danger' },
                 { label: 'Audit', value: 'Transition logged', tone: 'ok' },
               ]}
             />
@@ -207,7 +207,7 @@ function SupervisorReviewCard({
 
       <label>
         <span>Resolution notes</span>
-        <textarea value={notes} onChange={(event) => onNotes(event.target.value)} placeholder="Optional acknowledgement notes" />
+        <textarea value={notes} onChange={(event) => onNotes(event.target.value)} placeholder="Decision notes, correction reference, or reason for dismissal" />
       </label>
 
       <div className="list-item__actions">
@@ -228,7 +228,7 @@ function PayloadSummary({ review }: { review: ConflictReviewListItem }) {
   if (review.kind === 'unlogged_swap') {
     return (
       <dl className="payload-grid">
-        <PayloadRow label="Truck" value={payload.truckId} />
+        <PayloadRow label="Truck" value={truckDisplayValue(payload.truckLabel, payload.truckId)} />
         <PayloadRow label="Expected mother" value={payload.expectedMotherSerial ?? '(none recorded)'} />
         <PayloadRow label="Observed mother" value={payload.observedMotherSerial} />
         <PayloadRow label="Expected subs" value={arrayValue(payload.expectedSubSerials)} />
@@ -251,10 +251,127 @@ function PayloadSummary({ review }: { review: ConflictReviewListItem }) {
     );
   }
 
+  if (review.kind === 'import_conflict') {
+    return <ImportConflictSummary payload={payload} />;
+  }
+
   return (
     <dl className="payload-grid">
       {Object.entries(payload).map(([key, value]) => (
         <PayloadRow key={key} label={key} value={typeof value === 'object' ? JSON.stringify(value) : value} />
+      ))}
+    </dl>
+  );
+}
+
+function ImportConflictSummary({ payload }: { payload: Record<string, unknown> }) {
+  const reason = stringValue(payload.reason);
+  const source = stringValue(payload.source);
+  const row = objectValue(payload.row);
+  const duplicatedSubs = arrayValue(payload.duplicated_subs);
+
+  if (reason === 'kit_mismatch_updated_registry') {
+    return (
+      <div className="review-detail">
+        <dl className="payload-grid">
+          <PayloadRow label="Issue" value="Installation kit does not match Updated Registry for this mother/truck." />
+          <PayloadRow label="Source" value={source} />
+          <PayloadRow label="Truck" value={stringValue(row.truck)} />
+          <PayloadRow label="Mother" value={stringValue(row.mother)} />
+          <PayloadRow label="Install row" value={stringValue(row.install_row)} />
+          <PayloadRow label="Registry row" value={stringValue(row.registry_row)} />
+        </dl>
+        <table className="review-evidence-table">
+          <thead>
+            <tr>
+              <th>Slot</th>
+              <th>Installation sheet</th>
+              <th>Updated Registry</th>
+              <th>Result</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(['b', 'c', 'd'] as const).map((slot) => {
+              const install = stringValue(row[`install_sub_${slot}`]);
+              const registry = stringValue(row[`registry_sub_${slot}`]);
+              const match = install !== '' && install === registry;
+              return (
+                <tr key={slot} data-tone={match ? 'ok' : 'danger'}>
+                  <td>{slot.toUpperCase()}</td>
+                  <td>{install || 'Missing'}</td>
+                  <td>{registry || 'Missing'}</td>
+                  <td>{match ? 'Match' : 'Mismatch'}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+
+  if (reason === 'invalid_masterlist_kit') {
+    const invalidReasons = invalidMasterlistReasons(row);
+    return (
+      <div className="review-detail">
+        <dl className="payload-grid">
+          <PayloadRow label="Issue" value={invalidReasons.join('; ')} />
+          <PayloadRow label="Source" value={source} />
+          <PayloadRow label="Masterlist row" value={stringValue(row.source_row)} />
+          <PayloadRow label="Mother" value={stringValue(row.mother)} />
+          <PayloadRow label="SIM" value={stringValue(row.sim)} />
+          <PayloadRow label="Date" value={stringValue(row.date)} />
+          <PayloadRow label="Sub B" value={stringValue(row.sub_b) || 'Missing'} />
+          <PayloadRow label="Sub C" value={stringValue(row.sub_c) || 'Missing'} />
+          <PayloadRow label="Sub D" value={stringValue(row.sub_d) || 'Missing'} />
+        </dl>
+      </div>
+    );
+  }
+
+  if (reason === 'masterlist_sub_in_multiple_kits') {
+    return (
+      <div className="review-detail">
+        <dl className="payload-grid">
+          <PayloadRow label="Issue" value="One or more sub-lock serials are registered in more than one masterlist kit." />
+          <PayloadRow label="Duplicated sub-locks" value={duplicatedSubs} />
+          <PayloadRow label="Source" value={source} />
+          <PayloadRow label="Masterlist row" value={stringValue(row.source_row)} />
+          <PayloadRow label="Mother" value={stringValue(row.mother)} />
+          <PayloadRow label="SIM" value={stringValue(row.sim)} />
+          <PayloadRow label="Sub B" value={stringValue(row.sub_b)} />
+          <PayloadRow label="Sub C" value={stringValue(row.sub_c)} />
+          <PayloadRow label="Sub D" value={stringValue(row.sub_d)} />
+        </dl>
+      </div>
+    );
+  }
+
+  if (reason === 'mother_missing_registration_masterlist') {
+    return (
+      <div className="review-detail">
+        <dl className="payload-grid">
+          <PayloadRow label="Issue" value="Latest installation uses a mother that is still missing from Registration Masterlist. This stayed open because at least one sub-lock is already registered to another mother." />
+          <PayloadRow label="Source" value={source} />
+          <PayloadRow label="Install row" value={stringValue(row.source_row)} />
+          <PayloadRow label="Submitted" value={stringValue(row.submitted_at)} />
+          <PayloadRow label="Team member" value={stringValue(row.team_member)} />
+          <PayloadRow label="Truck" value={stringValue(row.truck)} />
+          <PayloadRow label="Mother" value={stringValue(row.mother)} />
+          <PayloadRow label="Sub B" value={stringValue(row.sub_b)} />
+          <PayloadRow label="Sub C" value={stringValue(row.sub_c)} />
+          <PayloadRow label="Sub D" value={stringValue(row.sub_d)} />
+        </dl>
+      </div>
+    );
+  }
+
+  return (
+    <dl className="payload-grid">
+      <PayloadRow label="Issue" value={reason ? reason.replaceAll('_', ' ') : 'Import conflict'} />
+      <PayloadRow label="Source" value={source} />
+      {Object.entries(row).map(([key, value]) => (
+        <PayloadRow key={key} label={key.replaceAll('_', ' ')} value={typeof value === 'object' ? JSON.stringify(value) : value} />
       ))}
     </dl>
   );
@@ -274,17 +391,55 @@ function arrayValue(value: unknown): string {
   return Array.isArray(value) ? value.join(', ') || '(none)' : '';
 }
 
+function objectValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
+}
+
+function stringValue(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+}
+
+function invalidMasterlistReasons(row: Record<string, unknown>): string[] {
+  const subs = ['sub_b', 'sub_c', 'sub_d'].map((key) => stringValue(row[key]).trim()).filter(Boolean);
+  const reasons: string[] = [];
+  if (subs.length === 0) reasons.push('Mother-only registration; no sub-locks listed');
+  else if (subs.length < 3) reasons.push(`Registration has ${subs.length} sub-lock${subs.length === 1 ? '' : 's'} listed; expected 3 for a complete kit`);
+  if (new Set(subs).size !== subs.length) reasons.push('Same sub-lock appears more than once in this kit');
+  return reasons.length ? reasons : ['Registration row needs review'];
+}
+
 function primaryLine(review: ConflictReviewListItem): string {
   const payload = review.payload;
   if (review.kind === 'sync_conflict') {
     const queuedMutation = payload.queuedMutation as { endpoint?: string } | undefined;
     return queuedMutation?.endpoint ?? 'Sync conflict';
   }
-  if (typeof payload.truckId === 'string') return payload.truckId;
+  if (typeof payload.truckId === 'string' || typeof payload.truckLabel === 'string') return truckDisplayValue(payload.truckLabel, payload.truckId);
   if (typeof payload.observedMotherSerial === 'string') return payload.observedMotherSerial;
+  if (review.kind === 'import_conflict') {
+    const reason = importReasonTitle(stringValue(payload.reason));
+    const row = objectValue(payload.row);
+    const truck = stringValue(row.truck);
+    const mother = stringValue(row.mother);
+    return [reason || 'Import conflict', truck || mother].filter(Boolean).join(' - ');
+  }
   return 'Review details';
+}
+
+function truckDisplayValue(label: unknown, id: unknown): string {
+  if (typeof label === 'string' && label.trim()) return label;
+  if (typeof id !== 'string' || !id.trim()) return '';
+  return id.startsWith('trk_') ? 'Truck' : id;
 }
 
 function formatKind(kind: string): string {
   return kind.replaceAll('_', ' ');
+}
+
+function importReasonTitle(reason: string): string {
+  if (reason === 'invalid_masterlist_kit') return 'Registration issue';
+  if (reason === 'kit_mismatch_updated_registry') return 'Kit mismatch';
+  if (reason === 'masterlist_sub_in_multiple_kits') return 'Duplicate sub-lock registration';
+  if (reason === 'mother_missing_registration_masterlist') return 'Missing masterlist registration';
+  return reason.replaceAll('_', ' ');
 }
