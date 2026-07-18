@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { offlineDb } from '../../../lib/offline/db';
 import {
   Badge,
@@ -136,6 +137,8 @@ export default function LookupPage() {
     { slot: 'C' as const, id: null, serial: null },
     { slot: 'D' as const, id: null, serial: null },
   ];
+  const truckContext = view?.target.kind === 'truck' ? view.target.label : null;
+  const deviceContext = view?.target.kind === 'mother_device' ? view.target.label : currentMother?.serial ?? null;
 
   const statusItems = useMemo(
     () => [
@@ -239,6 +242,22 @@ export default function LookupPage() {
             <StatusList items={statusItems} />
           </Panel>
 
+          {view && view.target.kind !== 'unknown' && (
+            <Panel title="Operational actions">
+              <div className="context-action-grid">
+                <Link className="btn btn--primary" href={withContext('/verify', { truck: truckContext })}>
+                  Verify physical kit
+                </Link>
+                <Link className="btn btn--secondary" href={withContext('/fault', { truck: truckContext, device: deviceContext })}>
+                  Report fault
+                </Link>
+                <Link className="btn btn--secondary" href={withContext('/movement', { truck: truckContext, device: deviceContext })}>
+                  Reassign or replace
+                </Link>
+              </div>
+            </Panel>
+          )}
+
           {view?.target.kind === 'truck' && view.target.id && (
             <Panel title="Serving company — correction (supervisor only)">
               <p className="empty-state">
@@ -278,6 +297,17 @@ export default function LookupPage() {
         </section>
 
         <section className="cockpit-grid__side">
+          <Panel title="Operational archives">
+            <div className="context-action-grid">
+              <Link className="btn btn--secondary" href="/register?archive=1#registered-kits">
+                Registered kits
+              </Link>
+              <Link className="btn btn--secondary" href="/install?archive=1#installation-history">
+                Installation history
+              </Link>
+            </div>
+          </Panel>
+
           <Panel
             title="Conflict reviews"
             action={view?.reviews?.length ? <Badge tone="danger">{view.reviews.length}</Badge> : null}
@@ -293,6 +323,14 @@ export default function LookupPage() {
       </div>
     </main>
   );
+}
+
+function withContext(path: string, values: { truck?: string | null; device?: string | null }): string {
+  const params = new URLSearchParams();
+  if (values.truck) params.set('truck', values.truck);
+  if (values.device) params.set('device', values.device);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function formatClientTimestamp(value: number): string {

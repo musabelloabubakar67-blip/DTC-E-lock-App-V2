@@ -23,13 +23,13 @@ const INSTALLER_ACTIONS = [
   { href: '/verify', label: 'Verify', icon: 'verify' },
   { href: '/register', label: 'Register', icon: 'register' },
   { href: '/install', label: 'Install', icon: 'install' },
-  { href: '/fault', label: 'Fault', icon: 'fault' },
-  { href: '/movement', label: 'Movement', icon: 'movement' },
+  { href: '/fault', label: 'Repairs', icon: 'fault' },
+  { href: '/movement', label: 'Reassign', icon: 'movement' },
 ];
 
 const SUPERVISOR_ACTIONS = [
   { href: '/review', label: 'Review', icon: 'review' },
-  { href: '/triage', label: 'Triage', icon: 'triage' },
+  { href: '/triage', label: 'Repair queue', icon: 'triage' },
 ];
 
 export default async function HomePage() {
@@ -168,7 +168,7 @@ export default async function HomePage() {
           </section>
 
           <section className="dd-panel">
-            <PanelTitle title="Repair triage" href="/triage" />
+            <PanelTitle title="Repair queue" href="/triage" />
             <div className="dd-feed">
               {dashboard.repairPool.length === 0 && <Empty label="No devices are waiting in repair." />}
               {dashboard.repairPool.slice(0, 5).map((device) => (

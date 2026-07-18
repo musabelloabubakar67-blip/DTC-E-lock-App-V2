@@ -48,6 +48,19 @@ export default function FaultPage() {
   const [result, setResult] = useState<{ status: 'idle' | 'queued' | 'error'; message?: string }>({ status: 'idle' });
 
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const truckId = params.get('truck');
+    const deviceId = params.get('device');
+    if (truckId || deviceId) {
+      setForm((current) => ({
+        ...current,
+        ...(truckId ? { truckId } : {}),
+        ...(deviceId ? { deviceId } : {}),
+      }));
+    }
+  }, []);
+
+  useEffect(() => {
     fetchSupervisors().then(setSupervisors);
   }, []);
 
@@ -169,11 +182,11 @@ export default function FaultPage() {
     <main className="fault-cockpit">
       <IndustrialPageHeader
         eyebrow="Incident capture and authority"
-        title="Fault"
+        title="Repairs"
         accent="Report"
         metric={String(pendingFaults.length).padStart(2, '0')}
         description="Report device issues while preserving authority, assignment and repair history."
-        status={<Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} pending</Badge>}
+        status={<Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} fault reports queued</Badge>}
       />
 
       <TrustBanner

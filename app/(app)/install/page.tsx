@@ -82,8 +82,16 @@ export default function InstallPage() {
   const [truckQuery, setTruckQuery] = useState('');
   const [loadedTruckLabel, setLoadedTruckLabel] = useState<string | null>(null);
   const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'error'>('idle');
+  const [showHistoryArchive, setShowHistoryArchive] = useState(false);
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('archive') === '1') {
+      setShowHistoryArchive(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showHistoryArchive) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => void loadInstallHistory(historyPage, historyQuery, controller.signal),
@@ -93,7 +101,7 @@ export default function InstallPage() {
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [historyPage, historyQuery]);
+  }, [historyPage, historyQuery, showHistoryArchive]);
 
   useEffect(() => {
     let cancelled = false;
@@ -338,9 +346,9 @@ export default function InstallPage() {
         eyebrow="Truck and kit assignment"
         title="Install"
         accent="Truck"
-        metric={historyTotal.toLocaleString()}
-        description="Every historical installation remains visible. Current assignment is separated from event history."
-        status={<Badge tone={pendingInstalls.length > 0 ? 'warning' : 'muted'}>{pendingInstalls.length} pending</Badge>}
+        metric={String(pendingInstalls.length).padStart(2, '0')}
+        description="Record the current truck assignment and configuration check without mixing it with archive history."
+        status={<Badge tone={pendingInstalls.length > 0 ? 'warning' : 'muted'}>{pendingInstalls.length} install events queued</Badge>}
       />
 
       <TrustBanner
@@ -538,7 +546,23 @@ export default function InstallPage() {
             />
           </Panel>
 
-          <Panel title="Installation history" className="table-workbench" action={<Badge tone="muted">{historyLoading ? 'Loading' : `${installHistory.length ? historyPage * historyPageSize + 1 : 0}-${Math.min(historyTotal, (historyPage + 1) * historyPageSize)} of ${historyTotal}`}</Badge>}>
+          <Panel
+            id="installation-history"
+            title="Installation history archive"
+            className="table-workbench"
+            action={
+              <div className="panel-actions">
+                {showHistoryArchive && (
+                  <Badge tone="muted">{historyLoading ? 'Loading' : `${installHistory.length ? historyPage * historyPageSize + 1 : 0}-${Math.min(historyTotal, (historyPage + 1) * historyPageSize)} of ${historyTotal}`}</Badge>
+                )}
+                <button className="btn btn--secondary btn--compact" type="button" onClick={() => setShowHistoryArchive((open) => !open)}>
+                  {showHistoryArchive ? 'Close archive' : 'Open archive'}
+                </button>
+              </div>
+            }
+          >
+            {showHistoryArchive ? (
+              <>
             {historyError && <p className="banner banner--error">{historyError}</p>}
             <label>
               <span>Search installation history</span>
@@ -570,6 +594,10 @@ export default function InstallPage() {
                 disabled: historyLoading,
               }}
             />
+              </>
+            ) : (
+              <p className="empty-state">Open the full installation archive from Lookup when historical search is needed.</p>
+            )}
           </Panel>
 
           <Panel title="Install rules">

@@ -62,8 +62,16 @@ export default function RegisterPage() {
   const [batchWorking, setBatchWorking] = useState(false);
   const [releaseDraft, setReleaseDraft] = useState<{ registrationIds: string[]; label: string } | null>(null);
   const [releaseNote, setReleaseNote] = useState('');
+  const [showRegistryArchive, setShowRegistryArchive] = useState(false);
 
   useEffect(() => {
+    if (new URLSearchParams(window.location.search).get('archive') === '1') {
+      setShowRegistryArchive(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!showRegistryArchive) return;
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => void loadRegistry(registryPage, registryQuery, controller.signal),
@@ -73,7 +81,7 @@ export default function RegisterPage() {
       controller.abort();
       window.clearTimeout(timeout);
     };
-  }, [registryPage, registryQuery]);
+  }, [registryPage, registryQuery, showRegistryArchive]);
 
   async function loadRegistry(page = registryPage, query = registryQuery, signal?: AbortSignal) {
     setRegistryLoading(true);
@@ -110,7 +118,7 @@ export default function RegisterPage() {
     const result = await submitRegistrationKit(values);
     setKitList((list) => list.map((entry) => (entry.id === entryId ? { ...entry, result } : entry)));
     if (result.status === 'success') {
-      await loadRegistry();
+      if (showRegistryArchive) await loadRegistry();
     }
   }
 
@@ -260,9 +268,9 @@ export default function RegisterPage() {
         eyebrow="Device registration workbench"
         title="Register"
         accent="Kit"
-        metric={registryTotal.toLocaleString()}
+        metric={String(successCount).padStart(2, '0')}
         description="Capture the mother lock and three sub-locks as one controlled kit."
-        status={<Badge tone={errorCount > 0 ? 'danger' : pendingCount > 0 ? 'warning' : 'muted'}>{successCount} registered</Badge>}
+        status={<Badge tone={errorCount > 0 ? 'danger' : pendingCount > 0 ? 'warning' : 'muted'}>{successCount} registered this session</Badge>}
       />
 
       <TrustBanner
@@ -388,7 +396,23 @@ export default function RegisterPage() {
             />
           </Panel>
 
-          <Panel title="Registered kits" className="table-workbench" action={<Badge tone="muted">{registryLoading ? 'Loading' : `${registryRows.length ? registryPage * registryPageSize + 1 : 0}-${Math.min(registryTotal, (registryPage + 1) * registryPageSize)} of ${registryTotal}`}</Badge>}>
+          <Panel
+            id="registered-kits"
+            title="Registered kits archive"
+            className="table-workbench"
+            action={
+              <div className="panel-actions">
+                {showRegistryArchive && (
+                  <Badge tone="muted">{registryLoading ? 'Loading' : `${registryRows.length ? registryPage * registryPageSize + 1 : 0}-${Math.min(registryTotal, (registryPage + 1) * registryPageSize)} of ${registryTotal}`}</Badge>
+                )}
+                <button className="btn btn--secondary btn--compact" type="button" onClick={() => setShowRegistryArchive((open) => !open)}>
+                  {showRegistryArchive ? 'Close archive' : 'Open archive'}
+                </button>
+              </div>
+            }
+          >
+            {showRegistryArchive ? (
+              <>
             {registryError && <p className="banner banner--error">{registryError}</p>}
             <label>
               <span>Search registered kits</span>
@@ -483,6 +507,10 @@ export default function RegisterPage() {
                 disabled: registryLoading,
               }}
             />
+              </>
+            ) : (
+              <p className="empty-state">Open the full registry from Lookup when you need search, release, or ownership controls.</p>
+            )}
           </Panel>
 
           <Panel title="Register rules">

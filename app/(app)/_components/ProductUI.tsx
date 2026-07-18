@@ -17,6 +17,7 @@ import {
 import { CameraScanner } from '../../../lib/qr/scanner';
 
 type PanelProps = {
+  id?: string;
   title?: string;
   action?: React.ReactNode;
   className?: string;
@@ -53,9 +54,9 @@ export function IndustrialPageHeader({
   );
 }
 
-export function Panel({ title, action, className, children }: PanelProps) {
+export function Panel({ id, title, action, className, children }: PanelProps) {
   return (
-    <section className={['panel', className].filter(Boolean).join(' ')}>
+    <section id={id} className={['panel', className].filter(Boolean).join(' ')}>
       {(title || action) && (
         <header className="panel__header">
           {title && <h2>{title}</h2>}
@@ -129,12 +130,14 @@ export function ScanInputRow({
   value,
   placeholder,
   onChange,
+  required,
 }: {
   label: string;
   prefix: string;
   value: string;
   placeholder: string;
-  onChange: (value: string) => void;
+  onChange: (value: string, source?: 'qr_scan' | 'manual') => void;
+  required?: boolean;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
   const clearTimerRef = useRef<number | null>(null);
@@ -173,7 +176,7 @@ export function ScanInputRow({
   function handleDetected(rawValue: string) {
     const normalized = rawValue.trim();
     if (normalized) {
-      onChange(normalized);
+      onChange(normalized, 'qr_scan');
     }
     setScannerOpen(false);
     setTemporaryMode('scan');
@@ -186,7 +189,13 @@ export function ScanInputRow({
         <span>{label}</span>
         <span className="scan-input-row__control">
           <span className="scan-input-row__prefix">{prefix}</span>
-          <input ref={inputRef} value={value} placeholder={placeholder} onChange={(event) => onChange(event.target.value)} />
+          <input
+            ref={inputRef}
+            value={value}
+            placeholder={placeholder}
+            required={required}
+            onChange={(event) => onChange(event.target.value, 'manual')}
+          />
         </span>
       </label>
       <button

@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { offlineDb } from '../../../lib/offline/db';
 import {
   Badge,
@@ -145,12 +146,17 @@ export default function TriagePage() {
     <main className="triage-cockpit">
       <IndustrialPageHeader
         eyebrow="Device disposition workbench"
-        title="Repair"
-        accent={String(visibleItems.length).padStart(2, '0')}
+        title="Repairs"
+        accent="Queue"
         metric={loading ? '--' : String(visibleItems.length).padStart(2, '0')}
         description="Reported devices move through controlled repair, return-to-service or retirement decisions."
-        status={<Badge tone={visibleItems.length > 0 ? 'danger' : loading ? 'warning' : 'ok'}>{loading ? 'Loading' : `${visibleItems.length} repair`}</Badge>}
+        status={<Badge tone={pendingTriage.length > 0 ? 'warning' : 'muted'}>{pendingTriage.length} repair actions queued</Badge>}
       />
+
+      <nav className="workflow-tabs" aria-label="Repairs views">
+        <Link href="/fault">Report fault</Link>
+        <Link href="/triage" aria-current="page">Repair queue</Link>
+      </nav>
 
       <TrustBanner
         empty={loading || visibleItems.length === 0}
@@ -205,7 +211,14 @@ export default function TriagePage() {
             <StatusList items={statusItems} />
           </Panel>
 
-          <Panel title="Selected device">
+          <Panel
+            title="Selected device"
+            action={selectedItem ? (
+              <Link className="btn btn--secondary btn--compact" href={`/movement?device=${encodeURIComponent(selectedItem.serial)}`}>
+                Reassign or replace
+              </Link>
+            ) : null}
+          >
             {selectedItem ? (
               <StatusList
                 items={[

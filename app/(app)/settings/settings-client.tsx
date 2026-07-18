@@ -1,11 +1,11 @@
 'use client';
 
 import { useFormState } from 'react-dom';
-import Link from 'next/link';
 import { signOut } from 'next-auth/react';
 import { useState, type ReactNode } from 'react';
-import { Database, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
+import { Database, FileJson, FileSpreadsheet, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
 import { Badge, DataTable, IndustrialPageHeader, Panel } from '../_components/ProductUI';
+import type { ExportSummary } from '../../../services/data-management.service';
 import type { SettingsData } from '../../../services/settings.service';
 import type { SettingsActionState } from './actions';
 
@@ -14,6 +14,7 @@ type Props = {
   currentUserId: string;
   currentRole: 'installer' | 'supervisor';
   initialActionState: SettingsActionState;
+  exportSummaries: ExportSummary[];
   changePasswordAction: (state: SettingsActionState, formData: FormData) => Promise<SettingsActionState>;
   createUserAction: (state: SettingsActionState, formData: FormData) => Promise<SettingsActionState>;
   setUserActiveAction: (formData: FormData) => Promise<void>;
@@ -25,6 +26,7 @@ export default function SettingsClient({
   currentUserId,
   currentRole,
   initialActionState,
+  exportSummaries,
   changePasswordAction,
   createUserAction,
   setUserActiveAction,
@@ -215,12 +217,29 @@ export default function SettingsClient({
         </div>
 
         {canManageUsers && (
-          <div className="settings-layout__data">
-            <Panel title="Data management" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
+          <div className="settings-layout__data" id="exports">
+            <Panel title="Exports" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
               <p className="settings-panel-copy">Export operational records in CSV or JSON.</p>
-              <Link className="btn btn--secondary" href="/settings/data-management">
-                Open exports
-              </Link>
+              <div className="export-list" role="list">
+                {exportSummaries.map((item) => (
+                  <article className="export-row" key={item.key} role="listitem">
+                    <div className="export-card__body">
+                      <strong>{item.label}</strong>
+                      <span>{item.rowCount.toLocaleString()} rows</span>
+                    </div>
+                    <div className="export-card__actions">
+                      <a className="btn btn--secondary btn--compact" href={`/api/settings/exports?dataset=${item.key}&format=csv`}>
+                        <FileSpreadsheet aria-hidden="true" />
+                        CSV
+                      </a>
+                      <a className="btn btn--secondary btn--compact" href={`/api/settings/exports?dataset=${item.key}&format=json`}>
+                        <FileJson aria-hidden="true" />
+                        JSON
+                      </a>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </Panel>
           </div>
         )}

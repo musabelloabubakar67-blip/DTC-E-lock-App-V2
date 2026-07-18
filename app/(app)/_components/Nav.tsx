@@ -9,37 +9,48 @@ import { useState } from 'react';
 
 export type NavRole = 'installer' | 'supervisor' | null;
 
-const INSTALLER_LINKS = [
+type NavLink = {
+  href: string;
+  label: string;
+  icon: string;
+  activeOn?: string[];
+  contextOnly?: boolean;
+};
+
+const INSTALLER_LINKS: NavLink[] = [
   { href: '/', label: 'Dashboard', icon: 'home' },
   { href: '/register', label: 'Register', icon: 'register' },
   { href: '/install', label: 'Install', icon: 'install' },
-  { href: '/fault', label: 'Fault', icon: 'fault' },
-  { href: '/movement', label: 'Movement', icon: 'movement' },
+  { href: '/fault', label: 'Repairs', icon: 'fault', activeOn: ['/fault', '/triage'] },
   { href: '/lookup', label: 'Lookup', icon: 'lookup' },
-  { href: '/verify', label: 'Verify', icon: 'verify' },
+  { href: '/movement', label: 'Reassign & Replace', icon: 'movement', contextOnly: true },
 ];
 
-const SUPERVISOR_ONLY_LINKS = [
-  { href: '/triage', label: 'Triage', icon: 'triage' },
+const SUPERVISOR_ONLY_LINKS: NavLink[] = [
   { href: '/review', label: 'Review', icon: 'review' },
 ];
 
-const SETTINGS_LINK = { href: '/settings', label: 'Settings', icon: 'settings' };
+const SETTINGS_LINK: NavLink = { href: '/settings', label: 'Settings', icon: 'settings' };
 
 export default function Nav({ role }: { role: NavRole }) {
   const pathname = usePathname();
   const [moreOpen, setMoreOpen] = useState(false);
 
+  const roleLinks = INSTALLER_LINKS.map((link) =>
+    role === 'supervisor' && link.label === 'Repairs' ? { ...link, href: '/triage' } : link,
+  );
   const links = role === 'supervisor'
-    ? [...INSTALLER_LINKS, ...SUPERVISOR_ONLY_LINKS, SETTINGS_LINK]
-    : [...INSTALLER_LINKS, SETTINGS_LINK];
+    ? [...roleLinks, ...SUPERVISOR_ONLY_LINKS, SETTINGS_LINK]
+    : [...roleLinks, SETTINGS_LINK];
   const primaryLinks = links.slice(0, 4);
   const secondaryLinks = links.slice(4);
+
+  const isActive = (link: NavLink) => pathname === link.href || Boolean(link.activeOn?.includes(pathname));
 
   return (
     <nav className="nav" aria-label="Main navigation" data-more-open={moreOpen}>
       {primaryLinks.map((link) => (
-        <Link key={link.href} className="nav__link" href={link.href} data-active={pathname === link.href} data-mobile-primary="true" onClick={() => setMoreOpen(false)}>
+        <Link key={link.href} className="nav__link" href={link.href} data-active={isActive(link)} data-mobile-primary="true" onClick={() => setMoreOpen(false)}>
           <span className="nav__icon" aria-hidden="true">
             <NavIcon name={link.icon} />
           </span>
@@ -48,7 +59,15 @@ export default function Nav({ role }: { role: NavRole }) {
       ))}
       <div className="nav__more-panel" aria-hidden={!moreOpen}>
         {secondaryLinks.map((link) => (
-          <Link key={link.href} className="nav__link" href={link.href} data-active={pathname === link.href} data-mobile-primary="false" onClick={() => setMoreOpen(false)}>
+          <Link
+            key={link.href}
+            className="nav__link"
+            href={link.href}
+            data-active={isActive(link)}
+            data-context-only={link.contextOnly || undefined}
+            data-mobile-primary="false"
+            onClick={() => setMoreOpen(false)}
+          >
             <span className="nav__icon" aria-hidden="true">
               <NavIcon name={link.icon} />
             </span>

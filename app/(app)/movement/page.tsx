@@ -62,6 +62,14 @@ export default function MovementPage() {
   const [pendingMovements, setPendingMovements] = useState<PendingMovement[]>([]);
   const [result, setResult] = useState<SubmitMovementResult | { status: 'idle' }>({ status: 'idle' });
 
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const truck = params.get('truck');
+    const device = params.get('device');
+    if (truck) setTruckId(truck);
+    if (device) setMotherDeviceId(device);
+  }, []);
+
   const isFaultReason = reason === 'faulty' || reason === 'damaged';
   const selectedAction = ACTIONS.find((action) => action.kind === kind)!;
 
@@ -183,24 +191,24 @@ export default function MovementPage() {
   return (
     <main className="movement-cockpit">
       <IndustrialPageHeader
-        eyebrow="Custody and equipment movement"
-        title="Move"
-        accent="Chain"
+        eyebrow="Exceptional custody correction"
+        title="Reassign"
+        accent="Replace"
         metric={String(pendingMovements.length).padStart(3, '0')}
-        description="A movement event preserves both the prior assignment and the new operational state."
-        status={<Badge tone={pendingMovements.length > 0 ? 'warning' : 'muted'}>{selectedAction.detail}</Badge>}
+        description="Handle swaps, replacements, removals and decommissioning that routine workflows cannot infer."
+        status={<Badge tone={pendingMovements.length > 0 ? 'warning' : 'muted'}>{pendingMovements.length} reassignment actions queued</Badge>}
       />
 
       <TrustBanner
         empty={!draftComplete}
-        emptyTitle="Movement draft incomplete"
-        emptyBody="Choose an action and enter the required truck/device fields before queueing the movement."
+        emptyTitle="Reassignment draft incomplete"
+        emptyBody="Choose an exception action and enter the required truck/device fields before queueing it."
         state="unverified"
         latestVerifiedAt={null}
         weakestTier={null}
       />
 
-      {result.status === 'queued' && <p className="banner banner--ok">Saved on device. Movement is pending sync.</p>}
+      {result.status === 'queued' && <p className="banner banner--ok">Saved on device. Reassignment is pending sync.</p>}
       {result.status === 'error' && <p className="banner banner--error">{`Error: ${result.message}`}</p>}
 
       <form className="movement-form cockpit-grid" onSubmit={handleSubmit}>
