@@ -3,7 +3,7 @@
 // ALWAYS surfaces for supervisor review (never silently). §6's inline-registration exception
 // applies ONLY here (an already-mounted, never-registered device discovered by scan) — it is
 // still forbidden at install time (installation.service.ts).
-import { eq, and, isNull, desc } from 'drizzle-orm';
+import { eq, and, isNull, desc, inArray } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import {
   devices,
@@ -74,7 +74,44 @@ export function getTrustState(
     .from(verifications)
     .where(eq(verifications.motherDeviceId, motherDeviceId))
     .orderBy(desc(verifications.verifiedAt))
-    .all()[0];
+    .get();
+
+  return deriveTrustState(latest);
+}
+
+export function getTrustStatesForMothers(
+  db: DbClient,
+  motherDeviceIds: string[],
+): Map<string, TrustStateResult> {
+  const uniqueMotherIds = [...new Set(motherDeviceIds)];
+  const results = new Map<string, TrustStateResult>();
+  if (uniqueMotherIds.length === 0) return results;
+
+  const rows = db
+    .select()
+    .from(verifications)
+    .where(inArray(verifications.motherDeviceId, uniqueMotherIds))
+    .orderBy(desc(verifications.verifiedAt))
+    .all() as Array<{
+    motherDeviceId: string;
+    verifiedAt: number;
+    weakestTier: VerificationSource;
+  }>;
+
+  const latestByMotherId = new Map<string, (typeof rows)[number]>();
+  for (const row of rows) {
+    if (!latestByMotherId.has(row.motherDeviceId)) latestByMotherId.set(row.motherDeviceId, row);
+  }
+
+  for (const motherDeviceId of uniqueMotherIds) {
+    results.set(motherDeviceId, deriveTrustState(latestByMotherId.get(motherDeviceId)));
+  }
+  return results;
+}
+
+function deriveTrustState(
+  latest: { verifiedAt: number; weakestTier: VerificationSource } | undefined,
+): TrustStateResult {
 
   if (!latest) {
     return { state: 'unverified', latestVerifiedAt: null, weakestTier: null };

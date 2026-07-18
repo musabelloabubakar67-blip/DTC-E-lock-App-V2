@@ -8,7 +8,7 @@ import {
   trucks,
   users,
 } from '../db/schema';
-import { getTrustState } from './verification.service';
+import { getTrustStatesForMothers } from './verification.service';
 import { listRegistrations, type RegistrationListItem } from './registration.service';
 import { listRepairPool, type RepairPoolItem } from './lookup.service';
 import type { ConflictReviewListItem } from './review.service';
@@ -60,11 +60,11 @@ export function getDashboard(db: DbClient, input: { orgId: string; role: 'instal
     ownershipStatus: 'owned' | 'released_external';
   }>;
   const allTrucks = db
-    .select({ id: trucks.id })
+    .select({ id: trucks.id, motherDeviceId: truckAssignments.deviceId })
     .from(trucks)
     .innerJoin(truckAssignments, eq(truckAssignments.truckId, trucks.id))
     .where(and(eq(trucks.orgId, input.orgId), eq(trucks.isActive, 1), isNull(truckAssignments.removedAt)))
-    .all() as Array<{ id: string }>;
+    .all() as Array<{ id: string; motherDeviceId: string }>;
   const reviews = listOpenReviewsForOrg(db, input.orgId);
   const repairPool = listRepairPool(db, input.orgId);
   const registrations = listRegistrations(db, input.orgId, 6);
@@ -100,10 +100,21 @@ export function getDashboard(db: DbClient, input: { orgId: string; role: 'instal
   };
 }
 
-function buildTrustSummary(db: DbClient, activeTrucks: Array<{ id: string }>): DashboardViewModel['trust'] {
+function buildTrustSummary(
+  db: DbClient,
+  activeTrucks: Array<{ id: string; motherDeviceId: string }>,
+): DashboardViewModel['trust'] {
   const summary = { verified: 0, stale: 0, unverified: 0, total: activeTrucks.length };
+  const trustByMotherId = getTrustStatesForMothers(
+    db,
+    activeTrucks.map((truck) => truck.motherDeviceId),
+  );
   for (const truck of activeTrucks) {
-    const trust = getTrustState(db, { truckId: truck.id });
+    const trust = trustByMotherId.get(truck.motherDeviceId) ?? {
+      state: 'unverified' as const,
+      latestVerifiedAt: null,
+      weakestTier: null,
+    };
     summary[trust.state] += 1;
   }
   return summary;

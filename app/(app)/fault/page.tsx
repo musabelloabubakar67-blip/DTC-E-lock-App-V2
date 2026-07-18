@@ -6,6 +6,7 @@ import type { CreateFaultReportFormValues } from '../../../lib/validations/fault
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   ScanInputRow,
   StatusList,
@@ -166,13 +167,14 @@ export default function FaultPage() {
 
   return (
     <main className="fault-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Fault</h1>
-          <p>{form.deviceId ? `Fault draft for ${form.deviceId}` : 'Device issue report'}</p>
-        </div>
-        <Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} pending</Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Incident capture and authority"
+        title="Fault"
+        accent="Report"
+        metric={String(pendingFaults.length).padStart(2, '0')}
+        description="Report device issues while preserving authority, assignment and repair history."
+        status={<Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} pending</Badge>}
+      />
 
       <TrustBanner
         empty={!draftComplete}
@@ -431,7 +433,7 @@ function daysAgo(unixSeconds: number): number {
 function formatClientTimestamp(value: number): string {
   if (!value) return '-';
   const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

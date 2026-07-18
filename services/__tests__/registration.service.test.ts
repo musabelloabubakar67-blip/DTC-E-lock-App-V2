@@ -3,7 +3,7 @@ import { eq, isNull, and } from 'drizzle-orm';
 import { kitMembers, devices, slotPairings } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures } from '../../tests/helpers/fixtures';
-import { registerKit } from '../registration.service';
+import { listRegistrationsPage, registerKit } from '../registration.service';
 import { BusinessError } from '../../lib/errors';
 
 describe('registration.service', () => {
@@ -105,5 +105,30 @@ describe('registration.service', () => {
         simNumber: '2348022222222',
       }),
     ).toThrow(BusinessError);
+  });
+  it('paginates the complete registry and searches across all kits', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+
+    for (let index = 1; index <= 3; index += 1) {
+      registerKit(db, {
+        orgId,
+        actorUserId: installerId,
+        motherSerial: `PAGE-MOTHER-${index}`,
+        subSerials: [`PAGE-${index}-B`, `PAGE-${index}-C`, `PAGE-${index}-D`],
+        simNumber: `SIM-PAGE-${index}`,
+        loggedDate: 1_700_000_000 + index,
+      });
+    }
+
+    const firstPage = listRegistrationsPage(db, orgId, { page: 0, pageSize: 2 });
+    const secondPage = listRegistrationsPage(db, orgId, { page: 1, pageSize: 2 });
+    const searchPage = listRegistrationsPage(db, orgId, { page: 0, pageSize: 8, query: 'MOTHER-2' });
+
+    expect(firstPage.total).toBe(3);
+    expect(firstPage.items).toHaveLength(2);
+    expect(secondPage.items).toHaveLength(1);
+    expect(searchPage.total).toBe(1);
+    expect(searchPage.items[0]?.motherSerial).toBe('PAGE-MOTHER-2');
   });
 });

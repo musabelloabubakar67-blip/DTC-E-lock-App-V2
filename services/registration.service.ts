@@ -43,6 +43,13 @@ export type RegistrationListItem = {
   ownershipNotes: string | null;
 };
 
+export type RegistrationPage = {
+  items: RegistrationListItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 function normalizeSerial(serial: string): string {
   return serial.trim().toUpperCase();
 }
@@ -217,6 +224,56 @@ export function listRegistrations(db: DbClient, orgId: string, limit?: number): 
       ownershipNotes: ownershipNotesByDeviceId.get(row.motherDeviceId) ?? null,
     };
   });
+}
+
+export function listRegistrationsPage(
+  db: DbClient,
+  orgId: string,
+  input: { page: number; pageSize: number; query?: string },
+): RegistrationPage {
+  const allRows = listRegistrations(db, orgId);
+  const terms = searchTerms(input.query);
+  const filteredRows = terms.length === 0
+    ? allRows
+    : allRows.filter((row) => matchesTerms(terms, [
+        row.motherSerial,
+        row.subSerials.join(' '),
+        row.simNumber ?? '',
+        row.actorName ?? '',
+        row.source,
+        row.ownershipStatus,
+        row.ownershipNotes ?? '',
+        new Date(row.loggedDate * 1000).toISOString(),
+        formatSearchTimestamp(row.loggedDate),
+      ]));
+  const pageSize = Math.min(100, Math.max(1, input.pageSize));
+  const lastPage = Math.max(0, Math.ceil(filteredRows.length / pageSize) - 1);
+  const page = Math.min(lastPage, Math.max(0, input.page));
+
+  return {
+    items: filteredRows.slice(page * pageSize, page * pageSize + pageSize),
+    total: filteredRows.length,
+    page,
+    pageSize,
+  };
+}
+
+function searchTerms(query?: string): string[] {
+  return (query ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+}
+
+function matchesTerms(terms: string[], fields: string[]): boolean {
+  const haystack = fields.join(' ').toLowerCase();
+  return terms.every((term) => haystack.includes(term));
+}
+
+function formatSearchTimestamp(unixSeconds: number): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(unixSeconds * 1000));
 }
 
 export function setRegistrationOwnership(

@@ -23,6 +23,36 @@ type PanelProps = {
   children: React.ReactNode;
 };
 
+export function IndustrialPageHeader({
+  eyebrow,
+  title,
+  accent,
+  metric,
+  description,
+  status,
+}: {
+  eyebrow: string;
+  title: string;
+  accent?: string;
+  metric: React.ReactNode;
+  description: string;
+  status?: React.ReactNode;
+}) {
+  return (
+    <header className="industrial-page-head">
+      <div className="industrial-page-head__title">
+        <span>[ {eyebrow} ]</span>
+        <h1>{title}{accent && <><br /><em>{accent}</em></>}</h1>
+      </div>
+      <div className="industrial-page-head__brief">
+        <strong>{metric}</strong>
+        <p>{description}</p>
+        {status && <div className="industrial-page-head__status">{status}</div>}
+      </div>
+    </header>
+  );
+}
+
 export function Panel({ title, action, className, children }: PanelProps) {
   return (
     <section className={['panel', className].filter(Boolean).join(' ')}>
@@ -229,19 +259,43 @@ export function DataTable({
   rows,
   emptyLabel,
   pageSize = 8,
+  pagination,
 }: {
   columns: string[];
   rows: Array<Array<React.ReactNode>>;
   emptyLabel: string;
   pageSize?: number;
+  pagination?: {
+    page: number;
+    pageSize: number;
+    total: number;
+    onPageChange: (page: number) => void;
+    disabled?: boolean;
+  };
 }) {
-  const [page, setPage] = useState(0);
-  const pageCount = Math.max(1, Math.ceil(rows.length / pageSize));
-  const visibleRows = useMemo(() => rows.slice(page * pageSize, page * pageSize + pageSize), [page, pageSize, rows]);
+  const [localPage, setLocalPage] = useState(0);
+  const controlled = Boolean(pagination);
+  const activePage = pagination?.page ?? localPage;
+  const activePageSize = pagination?.pageSize ?? pageSize;
+  const totalRows = pagination?.total ?? rows.length;
+  const pageCount = Math.max(1, Math.ceil(totalRows / activePageSize));
+  const visibleRows = useMemo(
+    () => controlled ? rows : rows.slice(activePage * activePageSize, activePage * activePageSize + activePageSize),
+    [activePage, activePageSize, controlled, rows],
+  );
 
   useEffect(() => {
-    setPage(0);
-  }, [rows.length, pageSize]);
+    if (!controlled) setLocalPage(0);
+  }, [controlled, rows.length, pageSize]);
+
+  function changePage(page: number) {
+    const nextPage = Math.min(pageCount - 1, Math.max(0, page));
+    if (pagination) {
+      pagination.onPageChange(nextPage);
+    } else {
+      setLocalPage(nextPage);
+    }
+  }
 
   if (rows.length === 0) {
     return <p className="empty-state">{emptyLabel}</p>;
@@ -260,7 +314,7 @@ export function DataTable({
           </thead>
           <tbody>
             {visibleRows.map((row, rowIndex) => (
-              <tr key={page * pageSize + rowIndex}>
+              <tr key={activePage * activePageSize + rowIndex}>
                 {row.map((cell, cellIndex) => (
                   <td key={cellIndex} data-label={columns[cellIndex]}>
                     {cell}
@@ -274,13 +328,13 @@ export function DataTable({
       {pageCount > 1 && (
         <div className="data-table-pagination" aria-label="Table pagination">
           <span>
-            {page * pageSize + 1}-{Math.min(rows.length, (page + 1) * pageSize)} of {rows.length}
+            {activePage * activePageSize + 1}-{Math.min(totalRows, (activePage + 1) * activePageSize)} of {totalRows}
           </span>
           <div>
-            <button type="button" className="btn btn--secondary btn--compact" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page === 0}>
+            <button type="button" className="btn btn--secondary btn--compact" onClick={() => changePage(activePage - 1)} disabled={activePage === 0 || pagination?.disabled}>
               Prev
             </button>
-            <button type="button" className="btn btn--secondary btn--compact" onClick={() => setPage((current) => Math.min(pageCount - 1, current + 1))} disabled={page === pageCount - 1}>
+            <button type="button" className="btn btn--secondary btn--compact" onClick={() => changePage(activePage + 1)} disabled={activePage === pageCount - 1 || pagination?.disabled}>
               Next
             </button>
           </div>
@@ -310,7 +364,7 @@ export function Badge({ children, tone }: { children: React.ReactNode; tone: 'ok
 
 export function formatTimestamp(unixSeconds: number | null): string {
   if (!unixSeconds) return '-';
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

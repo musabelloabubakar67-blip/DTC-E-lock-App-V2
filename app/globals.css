@@ -1,6 +1,4 @@
 /* Hallmark - pre-emit critique: P4 H4 E4 S4 R4 V4 */
-@import "../tokens.css";
-
 :root {
   --color-bg: #f3f6fb;
   --color-shell: #06264f;

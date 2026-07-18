@@ -84,6 +84,13 @@ export type InstallationHistoryItem = {
   actorName: string | null;
 };
 
+export type InstallationHistoryPage = {
+  items: InstallationHistoryItem[];
+  total: number;
+  page: number;
+  pageSize: number;
+};
+
 export function recordInstallation(db: DbClient, input: InstallKitInput): InstallKitResult {
   if (input.installMode === 'same_kit') {
     return recordSameKitInstallation(db, input);
@@ -409,6 +416,48 @@ export function listInstallationHistory(db: DbClient, orgId: string, limit?: num
       actorName: actorNameById.get(row.actorUserId) ?? null,
     };
   });
+}
+
+export function listInstallationHistoryPage(
+  db: DbClient,
+  orgId: string,
+  input: { page: number; pageSize: number; query?: string },
+): InstallationHistoryPage {
+  const allRows = listInstallationHistory(db, orgId);
+  const terms = (input.query ?? '').trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const filteredRows = terms.length === 0
+    ? allRows
+    : allRows.filter((row) => {
+        const haystack = [
+          row.truckLabel,
+          row.motherSerial,
+          row.subSerials.join(' '),
+          row.overallStatus ?? '',
+          row.actorName ?? '',
+          new Date(row.loggedDate * 1000).toISOString(),
+          formatSearchTimestamp(row.loggedDate),
+        ].join(' ').toLowerCase();
+        return terms.every((term) => haystack.includes(term));
+      });
+  const pageSize = Math.min(100, Math.max(1, input.pageSize));
+  const lastPage = Math.max(0, Math.ceil(filteredRows.length / pageSize) - 1);
+  const page = Math.min(lastPage, Math.max(0, input.page));
+
+  return {
+    items: filteredRows.slice(page * pageSize, page * pageSize + pageSize),
+    total: filteredRows.length,
+    page,
+    pageSize,
+  };
+}
+
+function formatSearchTimestamp(unixSeconds: number): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(unixSeconds * 1000));
 }
 
 function parseInstallSourceSubs(afterJson: string): string[] {

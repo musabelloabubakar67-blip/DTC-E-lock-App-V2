@@ -11,7 +11,7 @@
 // recorded at entry time. A plain source selector (not automatic scan-mode detection) keeps
 // this page self-contained without changing ProductUI's shared ScanInputRow.
 import { useState } from 'react';
-import { Panel } from '../_components/ProductUI';
+import { IndustrialPageHeader, Panel } from '../_components/ProductUI';
 import { submitVerification, type SubmitVerificationResult } from './actions';
 import type { RecordKitVerificationFormValues } from '../../../lib/validations/verification';
 
@@ -100,11 +100,13 @@ export default function VerifyPage() {
 
   return (
     <main className="verify-cockpit">
-      <h1>Verify kit</h1>
-      <p>
-        Scan the mother lock and its sub-locks against the registry. A partial scan is fine — type any serial
-        that won&apos;t scan off the physical label; that entry is tagged manual (§3).
-      </p>
+      <IndustrialPageHeader
+        eyebrow="Registry versus physical state"
+        title="Verify"
+        accent="Kit"
+        metric="SCAN"
+        description="Scan the physical kit, preserve source evidence and resolve matching registry reviews."
+      />
 
       <Panel title="Kit scan">
         <form onSubmit={handleSubmit}>

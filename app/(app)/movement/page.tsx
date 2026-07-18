@@ -6,6 +6,7 @@ import type { MovementActionFormValues } from '../../../lib/validations/movement
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   ScanInputRow,
   StatusList,
@@ -181,13 +182,14 @@ export default function MovementPage() {
 
   return (
     <main className="movement-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Movement</h1>
-          <p>{selectedAction.detail}</p>
-        </div>
-        <Badge tone={pendingMovements.length > 0 ? 'warning' : 'muted'}>{pendingMovements.length} pending</Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Custody and equipment movement"
+        title="Move"
+        accent="Chain"
+        metric={String(pendingMovements.length).padStart(3, '0')}
+        description="A movement event preserves both the prior assignment and the new operational state."
+        status={<Badge tone={pendingMovements.length > 0 ? 'warning' : 'muted'}>{selectedAction.detail}</Badge>}
+      />
 
       <TrustBanner
         empty={!draftComplete}
@@ -422,7 +424,7 @@ function readDeviceId(payload: Partial<MovementActionFormValues> | null): string
 function formatClientTimestamp(value: number): string {
   if (!value) return '-';
   const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

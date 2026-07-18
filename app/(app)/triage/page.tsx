@@ -5,6 +5,7 @@ import { offlineDb } from '../../../lib/offline/db';
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   StatusList,
   TrustBanner,
@@ -142,15 +143,14 @@ export default function TriagePage() {
 
   return (
     <main className="triage-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Triage</h1>
-          <p>Repair pool disposition console</p>
-        </div>
-        <Badge tone={visibleItems.length > 0 ? 'danger' : loading ? 'warning' : 'ok'}>
-          {loading ? 'Loading' : `${visibleItems.length} repair`}
-        </Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Device disposition workbench"
+        title="Repair"
+        accent={String(visibleItems.length).padStart(2, '0')}
+        metric={loading ? '--' : String(visibleItems.length).padStart(2, '0')}
+        description="Reported devices move through controlled repair, return-to-service or retirement decisions."
+        status={<Badge tone={visibleItems.length > 0 ? 'danger' : loading ? 'warning' : 'ok'}>{loading ? 'Loading' : `${visibleItems.length} repair`}</Badge>}
+      />
 
       <TrustBanner
         empty={loading || visibleItems.length === 0}
@@ -320,7 +320,7 @@ function repairAgeLabel(unixSeconds: number | null): string {
 function formatClientTimestamp(value: number): string {
   if (!value) return '-';
   const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

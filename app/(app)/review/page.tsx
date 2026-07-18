@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   StatusList,
   TrustBanner,
@@ -85,15 +86,14 @@ export default function ReviewPage() {
 
   return (
     <main className="review-console">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Review</h1>
-          <p>Supervisor conflict console</p>
-        </div>
-        <Badge tone={reviews.length > 0 ? 'danger' : loading ? 'warning' : 'ok'}>
-          {loading ? 'Loading' : `${reviews.length} open`}
-        </Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Evidence and decision control"
+        title="Review"
+        accent={String(reviews.length).padStart(2, '0')}
+        metric={loading ? '--' : `${reviews.length}!`}
+        description="Every review exposes source data, conflicting state, operational impact and resolution route."
+        status={<Badge tone={reviews.length > 0 ? 'danger' : loading ? 'warning' : 'ok'}>{loading ? 'Loading' : `${reviews.length} open`}</Badge>}
+      />
 
       <TrustBanner
         empty={reviews.length === 0}

@@ -1,4 +1,6 @@
+import '../tokens.css';
 import './globals.css';
+import './industrial.css';
 
 export const metadata = {
   title: 'DTC E-Lock',

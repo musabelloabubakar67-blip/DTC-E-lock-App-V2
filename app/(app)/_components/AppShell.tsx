@@ -29,10 +29,11 @@ export default function AppShell({
             <span />
             <span />
           </span>
-          <Image className="app-topbar__logo" src="/dtc-logo-white-cropped.png" alt="DTC Direct Trucking Company" width={148} height={48} priority />
-          <span className="app-topbar__product">E-Lock</span>
+          <Image className="app-topbar__logo" src="/dtc-logo.jpeg" alt="DTC Direct Trucking Company" width={148} height={48} priority />
+          <span className="app-topbar__product">Direct Trucking Company</span>
         </div>
         <div className="app-topbar__status">
+          <span className="app-topbar__system"><b>01</b>DTC / E-Lock control system</span>
           <SyncIndicator />
           <span
             className="app-topbar__online"

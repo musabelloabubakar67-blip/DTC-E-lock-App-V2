@@ -5,6 +5,7 @@ import type { RegisterKitFormValues } from '../../../lib/validations/registratio
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   ScanInputRow,
   StatusList,
@@ -43,6 +44,7 @@ const emptyForm: RegisterKitFormValues = {
 };
 
 const subSlots = ['B', 'C', 'D'] as const;
+const registryPageSize = 8;
 
 let nextEntryId = 1;
 
@@ -50,6 +52,9 @@ export default function RegisterPage() {
   const [form, setForm] = useState<RegisterKitFormValues>(emptyForm);
   const [kitList, setKitList] = useState<KitListEntry[]>([]);
   const [registryRows, setRegistryRows] = useState<RegistrationListItem[]>([]);
+  const [registryTotal, setRegistryTotal] = useState(0);
+  const [registryPage, setRegistryPage] = useState(0);
+  const [registryLoading, setRegistryLoading] = useState(false);
   const [registryError, setRegistryError] = useState<string | null>(null);
   const [registryQuery, setRegistryQuery] = useState('');
   const [ownershipWorkingId, setOwnershipWorkingId] = useState<string | null>(null);
@@ -59,27 +64,42 @@ export default function RegisterPage() {
   const [releaseNote, setReleaseNote] = useState('');
 
   useEffect(() => {
-    void loadRegistry();
-  }, []);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => void loadRegistry(registryPage, registryQuery, controller.signal),
+      registryQuery.trim() ? 250 : 0,
+    );
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [registryPage, registryQuery]);
 
-  useEffect(() => {
-    setSelectedRegistryIds((current) => {
-      const availableIds = new Set(registryRows.map((row) => row.id));
-      const next = new Set([...current].filter((id) => availableIds.has(id)));
-      return next.size === current.size ? current : next;
-    });
-  }, [registryRows]);
-
-  async function loadRegistry() {
+  async function loadRegistry(page = registryPage, query = registryQuery, signal?: AbortSignal) {
+    setRegistryLoading(true);
     try {
-      const response = await fetch('/api/registry', { cache: 'no-store' });
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(registryPageSize),
+      });
+      if (query.trim()) params.set('q', query.trim());
+      const response = await fetch(`/api/registry?${params}`, { cache: 'no-store', signal });
       if (!response.ok) throw new Error('registry_failed');
-      const payload = (await response.json()) as { data?: RegistrationListItem[] };
+      const payload = (await response.json()) as {
+        data?: RegistrationListItem[];
+        pagination?: { total: number; page: number; pageSize: number };
+      };
       setRegistryRows(Array.isArray(payload.data) ? payload.data : []);
+      setRegistryTotal(payload.pagination?.total ?? 0);
+      if (payload.pagination && payload.pagination.page !== page) setRegistryPage(payload.pagination.page);
       setRegistryError(null);
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       setRegistryRows([]);
+      setRegistryTotal(0);
       setRegistryError('Registered kits could not be loaded.');
+    } finally {
+      if (!signal?.aborted) setRegistryLoading(false);
     }
   }
 
@@ -162,7 +182,7 @@ export default function RegisterPage() {
   function selectVisibleRegistryRows() {
     setSelectedRegistryIds((current) => {
       const next = new Set(current);
-      for (const row of filteredRegistryRows) next.add(row.id);
+      for (const row of registryRows) next.add(row.id);
       return next;
     });
   }
@@ -203,20 +223,6 @@ export default function RegisterPage() {
   const pendingCount = kitList.filter((entry) => entry.result.status === 'pending').length;
   const successCount = kitList.filter((entry) => entry.result.status === 'success').length;
   const errorCount = kitList.filter((entry) => entry.result.status === 'error').length;
-  const filteredRegistryRows = useMemo(
-    () => filterRows(registryRows, registryQuery, (row) => [
-      row.motherSerial,
-      row.subSerials.join(' '),
-      row.simNumber ?? '',
-      row.actorName ?? '',
-      row.source,
-      ownershipLabel(row),
-      row.ownershipNotes ?? '',
-      formatTimestamp(row.loggedDate),
-    ]),
-    [registryRows, registryQuery],
-  );
-
   const statusItems = useMemo(
     () => [
       {
@@ -250,15 +256,14 @@ export default function RegisterPage() {
 
   return (
     <main className="register-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Register</h1>
-          <p>One kit at a time</p>
-        </div>
-        <Badge tone={errorCount > 0 ? 'danger' : pendingCount > 0 ? 'warning' : 'muted'}>
-          {successCount} registered
-        </Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Device registration workbench"
+        title="Register"
+        accent="Kit"
+        metric={registryTotal.toLocaleString()}
+        description="Capture the mother lock and three sub-locks as one controlled kit."
+        status={<Badge tone={errorCount > 0 ? 'danger' : pendingCount > 0 ? 'warning' : 'muted'}>{successCount} registered</Badge>}
+      />
 
       <TrustBanner
         empty={!kitComplete}
@@ -383,19 +388,22 @@ export default function RegisterPage() {
             />
           </Panel>
 
-          <Panel title="Registered kits" className="table-workbench" action={<Badge tone="muted">{filteredRegistryRows.length} of {registryRows.length}</Badge>}>
+          <Panel title="Registered kits" className="table-workbench" action={<Badge tone="muted">{registryLoading ? 'Loading' : `${registryRows.length ? registryPage * registryPageSize + 1 : 0}-${Math.min(registryTotal, (registryPage + 1) * registryPageSize)} of ${registryTotal}`}</Badge>}>
             {registryError && <p className="banner banner--error">{registryError}</p>}
             <label>
               <span>Search registered kits</span>
               <input
                 value={registryQuery}
-                onChange={(event) => setRegistryQuery(event.target.value)}
+                onChange={(event) => {
+                  setRegistryQuery(event.target.value);
+                  setRegistryPage(0);
+                }}
                 placeholder="Mother, sub-lock, SIM, source, or installer"
               />
             </label>
             <div className="registry-batch-bar">
               <Badge tone={selectedRegistryIds.size > 0 ? 'warning' : 'muted'}>{selectedRegistryIds.size} selected</Badge>
-              <button className="btn btn--secondary btn--compact" type="button" onClick={selectVisibleRegistryRows} disabled={batchWorking || filteredRegistryRows.length === 0}>
+              <button className="btn btn--secondary btn--compact" type="button" onClick={selectVisibleRegistryRows} disabled={batchWorking || registryRows.length === 0}>
                 Select visible
               </button>
               <button className="btn btn--secondary btn--compact" type="button" onClick={() => setSelectedRegistryIds(new Set())} disabled={batchWorking || selectedRegistryIds.size === 0}>
@@ -443,7 +451,7 @@ export default function RegisterPage() {
             )}
             <DataTable
               columns={['Pick', 'Registered', 'Mother', 'Sub-locks', 'SIM', 'Ownership', 'By', 'Action']}
-              rows={filteredRegistryRows.map((row) => [
+              rows={registryRows.map((row) => [
                 <input
                   aria-label={`Select ${row.motherSerial}`}
                   checked={selectedRegistryIds.has(row.id)}
@@ -467,6 +475,13 @@ export default function RegisterPage() {
                 </button>,
               ])}
               emptyLabel="No registered kits found yet."
+              pagination={{
+                page: registryPage,
+                pageSize: registryPageSize,
+                total: registryTotal,
+                onPageChange: setRegistryPage,
+                disabled: registryLoading,
+              }}
             />
           </Panel>
 
@@ -490,15 +505,6 @@ function ownershipLabel(row: RegistrationListItem): string {
   if (row.ownershipStatus === 'released_external') return row.ownershipNotes ? `Released - ${row.ownershipNotes}` : 'Released';
   if (row.ownershipStatus === 'mixed') return 'Mixed ownership';
   return 'Owned';
-}
-
-function filterRows<T>(rows: T[], query: string, fields: (row: T) => string[]): T[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return rows;
-  return rows.filter((row) => {
-    const haystack = fields(row).join(' ').toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
 }
 
 function ConfigSelect({

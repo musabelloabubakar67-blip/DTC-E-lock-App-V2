@@ -6,6 +6,7 @@ import type { InstallKitFormValues } from '../../../lib/validations/installation
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   ScanInputRow,
   StatusList,
@@ -65,12 +66,16 @@ const emptyForm: InstallKitFormValues = {
 };
 
 const subSlots = ['B', 'C', 'D'] as const;
+const historyPageSize = 5;
 
 export default function InstallPage() {
   const [form, setForm] = useState<InstallKitFormValues>(emptyForm);
   const [result, setResult] = useState<SubmitInstallationResult | { status: 'idle' }>({ status: 'idle' });
   const [pendingInstalls, setPendingInstalls] = useState<PendingInstall[]>([]);
   const [installHistory, setInstallHistory] = useState<InstallationHistoryItem[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyPage, setHistoryPage] = useState(0);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const [historyQuery, setHistoryQuery] = useState('');
   const [currentKit, setCurrentKit] = useState<CurrentTruckKit | null>(null);
@@ -79,8 +84,16 @@ export default function InstallPage() {
   const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'error'>('idle');
 
   useEffect(() => {
-    void loadInstallHistory();
-  }, []);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => void loadInstallHistory(historyPage, historyQuery, controller.signal),
+      historyQuery.trim() ? 250 : 0,
+    );
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [historyPage, historyQuery]);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,16 +130,31 @@ export default function InstallPage() {
     };
   }, [result]);
 
-  async function loadInstallHistory() {
+  async function loadInstallHistory(page = historyPage, query = historyQuery, signal?: AbortSignal) {
+    setHistoryLoading(true);
     try {
-      const response = await fetch('/api/installations', { cache: 'no-store' });
+      const params = new URLSearchParams({
+        page: String(page),
+        pageSize: String(historyPageSize),
+      });
+      if (query.trim()) params.set('q', query.trim());
+      const response = await fetch(`/api/installations?${params}`, { cache: 'no-store', signal });
       if (!response.ok) throw new Error('history_failed');
-      const payload = (await response.json()) as { data?: InstallationHistoryItem[] };
+      const payload = (await response.json()) as {
+        data?: InstallationHistoryItem[];
+        pagination?: { total: number; page: number; pageSize: number };
+      };
       setInstallHistory(Array.isArray(payload.data) ? payload.data : []);
+      setHistoryTotal(payload.pagination?.total ?? 0);
+      if (payload.pagination && payload.pagination.page !== page) setHistoryPage(payload.pagination.page);
       setHistoryError(null);
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
       setInstallHistory([]);
+      setHistoryTotal(0);
       setHistoryError('Installation history could not be loaded.');
+    } finally {
+      if (!signal?.aborted) setHistoryLoading(false);
     }
   }
 
@@ -267,18 +295,6 @@ export default function InstallPage() {
   const motherDisplayLabel =
     displayDeviceLabel(currentKit?.mother.serial, form.motherDeviceId) || (form.motherDeviceId ? 'Mother selected' : 'Not set');
   const subLocksDisplayLabel = displaySubLockLabel(currentKit, form.subDeviceIds);
-  const filteredInstallHistory = useMemo(
-    () => filterRows(installHistory, historyQuery, (item) => [
-      item.truckLabel,
-      item.motherSerial,
-      item.subSerials.join(' '),
-      item.overallStatus ?? '',
-      item.actorName ?? '',
-      formatTimestamp(item.loggedDate),
-    ]),
-    [installHistory, historyQuery],
-  );
-
   const statusItems = useMemo(
     () => [
       { label: 'Truck', value: truckDisplayLabel || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
@@ -318,13 +334,14 @@ export default function InstallPage() {
 
   return (
     <main className="install-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Install</h1>
-          <p>{form.truckId ? `Daily install event for ${truckDisplayLabel || 'loaded truck'}` : 'Truck-first daily installation workflow'}</p>
-        </div>
-        <Badge tone={pendingInstalls.length > 0 ? 'warning' : 'muted'}>{pendingInstalls.length} pending</Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Truck and kit assignment"
+        title="Install"
+        accent="Truck"
+        metric={historyTotal.toLocaleString()}
+        description="Every historical installation remains visible. Current assignment is separated from event history."
+        status={<Badge tone={pendingInstalls.length > 0 ? 'warning' : 'muted'}>{pendingInstalls.length} pending</Badge>}
+      />
 
       <TrustBanner
         empty={!kitComplete}
@@ -521,19 +538,22 @@ export default function InstallPage() {
             />
           </Panel>
 
-          <Panel title="Installation history" className="table-workbench" action={<Badge tone="muted">{filteredInstallHistory.length} of {installHistory.length}</Badge>}>
+          <Panel title="Installation history" className="table-workbench" action={<Badge tone="muted">{historyLoading ? 'Loading' : `${installHistory.length ? historyPage * historyPageSize + 1 : 0}-${Math.min(historyTotal, (historyPage + 1) * historyPageSize)} of ${historyTotal}`}</Badge>}>
             {historyError && <p className="banner banner--error">{historyError}</p>}
             <label>
               <span>Search installation history</span>
               <input
                 value={historyQuery}
-                onChange={(event) => setHistoryQuery(event.target.value)}
+                onChange={(event) => {
+                  setHistoryQuery(event.target.value);
+                  setHistoryPage(0);
+                }}
                 placeholder="Truck, mother, sub-lock, status, or installer"
               />
             </label>
             <DataTable
               columns={['Installed', 'Truck', 'Mother', 'Sub-locks', 'Status', 'By']}
-              rows={filteredInstallHistory.map((item) => [
+              rows={installHistory.map((item) => [
                 formatTimestamp(item.loggedDate),
                 item.truckLabel,
                 item.motherSerial,
@@ -542,7 +562,13 @@ export default function InstallPage() {
                 item.actorName ?? '-',
               ])}
               emptyLabel="No completed installations have synced to the server yet."
-              pageSize={5}
+              pagination={{
+                page: historyPage,
+                pageSize: historyPageSize,
+                total: historyTotal,
+                onPageChange: setHistoryPage,
+                disabled: historyLoading,
+              }}
             />
           </Panel>
 
@@ -560,15 +586,6 @@ export default function InstallPage() {
       </form>
     </main>
   );
-}
-
-function filterRows<T>(rows: T[], query: string, fields: (row: T) => string[]): T[] {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
-  if (terms.length === 0) return rows;
-  return rows.filter((row) => {
-    const haystack = fields(row).join(' ').toLowerCase();
-    return terms.every((term) => haystack.includes(term));
-  });
 }
 
 function humanTruckValue(value: string | null | undefined): string {
@@ -619,7 +636,7 @@ function isInternalDeviceId(value: string): boolean {
 function formatClientTimestamp(value: number): string {
   if (!value) return '-';
   const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

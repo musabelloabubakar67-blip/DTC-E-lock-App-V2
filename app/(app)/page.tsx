@@ -16,6 +16,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../../lib/auth';
 import { db } from '../../db';
 import { getDashboard } from '../../services/dashboard.service';
+import { IndustrialPageHeader } from './_components/ProductUI';
 
 const INSTALLER_ACTIONS = [
   { href: '/lookup', label: 'Lookup', icon: 'lookup' },
@@ -52,13 +53,14 @@ export default async function HomePage() {
 
   return (
     <main className="dd">
-      <header className="dd__heading">
-        <div>
-          <h1>Dashboard</h1>
-          <span>{role === 'supervisor' ? 'Supervisor operations cockpit' : 'Field operations cockpit'}</span>
-        </div>
-        <span className="dd__attention-pill" data-active={needsAttention}>{needsAttention ? 'Needs attention' : 'All clear'}</span>
-      </header>
+      <IndustrialPageHeader
+        eyebrow="Fleet operational register"
+        title="Fleet"
+        accent={dashboard.counts.inServiceMothers.toLocaleString()}
+        metric={`${utilization}%`}
+        description={`${dashboard.counts.availableMothers.toLocaleString()} mother locks remain available for assignment.`}
+        status={<span className="dd__attention-pill" data-active={needsAttention}>{needsAttention ? 'Needs attention' : 'All clear'}</span>}
+      />
 
       <section className="dd-alert" data-active={needsAttention}>
         <UiIcon name={needsAttention ? 'fault' : 'verify'} />
@@ -201,7 +203,7 @@ function Empty({ label }: { label: string }) {
 
 function formatDashboardTimestamp(unixSeconds: number | null): string {
   if (!unixSeconds) return '-';
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

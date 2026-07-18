@@ -4,7 +4,7 @@ import { slotPairings, truckAssignments, devices } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck } from '../../tests/helpers/fixtures';
 import { registerKit } from '../registration.service';
-import { installKit, listInstallationHistory, recordInstallation } from '../installation.service';
+import { installKit, listInstallationHistory, listInstallationHistoryPage, recordInstallation } from '../installation.service';
 
 describe('installation.service', () => {
   it('assigns slots positionally (C1→B, C2→C, C3→D) and sets mother + subs in_service', () => {
@@ -182,5 +182,13 @@ describe('installation.service', () => {
     expect(daily.assignmentId).toBe(first.assignmentId);
     expect(openAssignments).toHaveLength(1);
     expect(listInstallationHistory(db, orgId)).toHaveLength(2);
+
+    const firstPage = listInstallationHistoryPage(db, orgId, { page: 0, pageSize: 1 });
+    const secondPage = listInstallationHistoryPage(db, orgId, { page: 1, pageSize: 1 });
+    const searchPage = listInstallationHistoryPage(db, orgId, { page: 0, pageSize: 5, query: 'DAY123AB' });
+    expect(firstPage.total).toBe(2);
+    expect(firstPage.items).toHaveLength(1);
+    expect(secondPage.items).toHaveLength(1);
+    expect(searchPage.total).toBe(2);
   });
 });

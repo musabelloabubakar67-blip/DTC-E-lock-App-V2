@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DTC E-Lock - Industrial System Study</title>
+  <style>
+    /* Hallmark - pre-emit critique: P5 H5 E5 S5 R5 V5 */
+    :root {
+      --color-paper: #efefea;
+      --color-paper-2: #e5e5df;
+      --color-ink: #090909;
+      --color-muted: #62625d;
+      --color-accent: #e5231e;
+      --color-stage: #15171b;
+      --color-stage-line: #353941;
+      --color-stage-text: #f4f5f7;
+      --font-display: Arial, Helvetica, sans-serif;
+      --font-data: ui-monospace, "SFMono-Regular", Consolas, monospace;
+      --control-h: 52px;
+    }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; overflow-x: clip; }
+    body { margin: 0; color: var(--color-ink); background: var(--color-stage); font-family: var(--font-display); letter-spacing: 0; }
+    button, input, select, textarea { font: inherit; letter-spacing: 0; }
+    button, a, select { -webkit-tap-highlight-color: transparent; }
+    svg { display: block; }
+    .icon { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    .study-bar {
+      min-height: var(--control-h);
+      display: grid;
+      grid-template-columns: auto minmax(260px, 720px) auto;
+      align-items: center;
+      gap: 18px;
+      padding: 7px 14px;
+      color: var(--color-stage-text);
+      background: var(--color-stage);
+      border-bottom: 1px solid var(--color-stage-line);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+    }
+    .study-title { font: 800 10px var(--font-data); text-transform: uppercase; white-space: nowrap; }
+    .study-title span { color: #858c99; }
+    .route-picker { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 8px; }
+    .route-step, .mode-button {
+      min-height: 34px;
+      border: 1px solid var(--color-stage-line);
+      color: #b8bec8;
+      background: #1d2026;
+      cursor: pointer;
+      font: 800 9px var(--font-data);
+      text-transform: uppercase;
+    }
+    .route-step { width: 38px; }
+    .route-step:hover, .mode-button:hover { color: white; border-color: #69717e; }
+    .route-step:active, .mode-button:active { transform: translateY(1px); }
+    .route-select {
+      min-width: 0;
+      height: 34px;
+      padding: 0 12px;
+      border: 1px solid var(--color-stage-line);
+      color: white;
+      background: #1d2026;
+      font: 750 10px var(--font-data);
+      text-transform: uppercase;
+    }
+    .mode-control { display: grid; grid-template-columns: repeat(2, 76px); gap: 3px; padding: 3px; border: 1px solid var(--color-stage-line); background: #1d2026; }
+    .mode-button { min-height: 28px; border: 0; background: transparent; }
+    .mode-button[aria-selected="true"] { color: var(--color-ink); background: white; }
+
+    .stage { min-height: calc(100vh - var(--control-h)); padding: 0; background: var(--color-stage); }
+    .preview {
+      width: 100%;
+      min-height: calc(100vh - var(--control-h));
+      margin: 0 auto;
+      background: var(--color-paper);
+      container-type: inline-size;
+      transition: width 180ms ease;
+    }
+    .preview.is-mobile { width: min(390px, 100%); height: 844px; min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+    .app { min-height: max(844px, calc(100vh - var(--control-h))); display: grid; grid-template-columns: 176px minmax(0, 1fr); grid-template-rows: 76px minmax(0, 1fr); color: var(--color-ink); background: var(--color-paper); }
+
+    .brand { display: grid; place-items: center; padding: 10px; border-right: 2px solid var(--color-ink); border-bottom: 2px solid var(--color-ink); }
+    .brand img { width: 144px; filter: grayscale(1) contrast(1.85); mix-blend-mode: multiply; }
+    .mast { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; border-bottom: 2px solid var(--color-ink); }
+    .mast > * { min-width: 0; display: flex; align-items: center; padding: 0 18px; border-right: 1px solid var(--color-ink); font: 800 10px var(--font-data); text-transform: uppercase; }
+    .mast > *:last-child { border-right: 0; }
+    .mast-id b { margin-right: 10px; color: var(--color-accent); }
+    .live-mark { width: 8px; height: 8px; margin-right: 9px; background: var(--color-accent); }
+    .rail { min-height: 0; display: flex; flex-direction: column; border-right: 2px solid var(--color-ink); }
+    .nav { display: grid; }
+    .nav button {
+      min-height: 49px;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr) auto;
+      align-items: center;
+      padding: 0 13px;
+      border: 0;
+      border-bottom: 1px solid var(--color-ink);
+      color: var(--color-ink);
+      background: transparent;
+      cursor: pointer;
+      font: 800 9px var(--font-data);
+      text-align: left;
+      text-transform: uppercase;
+    }
+    .nav button:hover { background: var(--color-paper-2); }
+    .nav button.is-active { color: white; background: var(--color-ink); }
+    .nav button.is-active::after { content: "///"; color: var(--color-accent); }
+    .rail-foot { margin-top: auto; padding: 14px 12px; border-top: 2px solid var(--color-ink); font: 750 8px/1.55 var(--font-data); text-transform: uppercase; }
+    .main { min-width: 0; }
+    .mobile-nav { display: none; }
+
+    .page-head { min-height: 122px; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 30%); border-bottom: 2px solid var(--color-ink); }
+    .page-title { min-width: 0; padding: 20px 22px 16px; border-right: 2px solid var(--color-ink); }
+    .eyebrow, .section-title, .label, .hint, th, .micro { font-family: var(--font-data); text-transform: uppercase; }
+    .eyebrow { display: flex; justify-content: space-between; gap: 18px; font-size: 9px; font-weight: 800; }
+    .eyebrow b { color: var(--color-accent); }
+    .page-title h1 { min-width: 0; margin: 13px 0 0; font-size: clamp(42px, 5.2vw, 78px); line-height: .82; font-weight: 900; letter-spacing: 0; text-transform: uppercase; overflow-wrap: anywhere; }
+    .page-title h1 em { color: var(--color-accent); font-style: normal; }
+    .page-brief { display: grid; align-content: center; gap: 9px; padding: 18px 20px; }
+    .page-brief strong { font-size: 28px; line-height: .9; }
+    .page-brief p { max-width: 35ch; margin: 0; color: var(--color-muted); font: 750 9px/1.5 var(--font-data); text-transform: uppercase; }
+    .page-brief .danger { color: var(--color-accent); }
+
+    .section-title { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 14px; border-bottom: 1px solid var(--color-ink); font-size: 9px; font-weight: 800; }
+    .section-title b { color: var(--color-accent); }
+    .panel { min-width: 0; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); }
+    .panel:last-child { border-right: 0; }
+    .panel-body { padding: 14px; }
+    .metric-strip { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 2px solid var(--color-ink); }
+    .metric { min-height: 94px; padding: 13px 14px; border-right: 1px solid var(--color-ink); }
+    .metric:last-child { border-right: 0; }
+    .metric span { display: block; font: 800 8px var(--font-data); text-transform: uppercase; }
+    .metric strong { display: block; margin-top: 12px; font-size: 31px; line-height: 1; letter-spacing: 0; }
+    .metric small { display: block; margin-top: 6px; color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+    .metric.is-red strong { color: var(--color-accent); }
+    .button {
+      min-height: 40px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0 14px;
+      border: 1px solid var(--color-ink);
+      color: var(--color-paper);
+      background: var(--color-ink);
+      cursor: pointer;
+      font: 800 9px var(--font-data);
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+    .button:hover { color: white; background: var(--color-accent); border-color: var(--color-accent); }
+    .button:active { transform: translateY(1px); }
+    .button.secondary { color: var(--color-ink); background: transparent; }
+    .button.secondary:hover { color: white; background: var(--color-ink); border-color: var(--color-ink); }
+    .button.danger { color: white; background: var(--color-accent); border-color: var(--color-accent); }
+    .field { min-width: 0; display: grid; gap: 6px; }
+    .field label, .label { font: 800 8px var(--font-data); text-transform: uppercase; }
+    .input, .select, .textarea { width: 100%; min-width: 0; border: 1px solid var(--color-ink); color: var(--color-ink); background: transparent; outline: none; }
+    .input, .select { height: 40px; padding: 0 11px; }
+    .textarea { min-height: 76px; padding: 10px 11px; resize: none; }
+    .input:focus, .select:focus, .textarea:focus { box-shadow: inset 4px 0 0 var(--color-accent); }
+    .field-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    .serial-field { display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; border: 1px solid var(--color-ink); }
+    .serial-field b, .serial-field span { display: grid; place-items: center; font: 800 10px var(--font-data); }
+    .serial-field b { border-right: 1px solid var(--color-ink); }
+    .serial-field span { border-left: 1px solid var(--color-ink); color: var(--color-accent); }
+    .serial-field input { min-width: 0; height: 39px; padding: 0 10px; border: 0; color: var(--color-ink); background: transparent; outline: none; font: 750 10px var(--font-data); }
+    .stack { display: grid; gap: 10px; }
+    .status-list { margin: 0; }
+    .status-line { min-height: 48px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 14px; padding: 0 14px; border-bottom: 1px solid var(--color-ink); }
+    .status-line:last-child { border-bottom: 0; }
+    .status-line dt, .status-line dd { margin: 0; font: 750 9px var(--font-data); text-transform: uppercase; }
+    .status-line dd { text-align: right; }
+    .status-line dd.red { color: var(--color-accent); }
+    .table-wrap { min-width: 0; overflow: hidden; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th { height: 36px; padding: 0 10px; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); color: var(--color-muted); font-size: 7px; text-align: left; }
+    td { min-width: 0; height: 45px; padding: 8px 10px; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); font: 750 9px/1.25 var(--font-data); overflow-wrap: anywhere; }
+    th:last-child, td:last-child { border-right: 0; }
+    tbody tr:last-child td { border-bottom: 0; }
+    td strong { display: block; font: inherit; }
+    td small { display: block; margin-top: 3px; color: var(--color-muted); font-size: 7px; text-transform: uppercase; }
+    .tag { display: inline-flex; align-items: center; min-height: 20px; padding: 0 7px; border: 1px solid var(--color-ink); font: 800 7px var(--font-data); text-transform: uppercase; white-space: nowrap; }
+    .tag.red { color: white; background: var(--color-accent); border-color: var(--color-accent); }
+    .tag.black { color: white; background: var(--color-ink); }
+    .empty { min-height: 150px; display: grid; place-items: center; padding: 20px; text-align: center; }
+    .empty strong { display: block; font-size: 48px; line-height: 1; }
+    .empty span { display: block; margin-top: 8px; color: var(--color-muted); font: 750 8px var(--font-data); text-transform: uppercase; }
+    .choice-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--color-ink); }
+    .choice { min-height: 58px; border: 0; border-right: 1px solid var(--color-ink); color: var(--color-ink); background: transparent; cursor: pointer; font: 800 8px var(--font-data); text-transform: uppercase; }
+    .choice:last-child { border-right: 0; }
+    .choice.is-active { color: white; background: var(--color-ink); }
+    .choice:hover { box-shadow: inset 0 -4px 0 var(--color-accent); }
+    .footer-note { min-height: 42px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 14px; border-top: 1px solid var(--color-ink); color: var(--color-muted); font: 750 8px var(--font-data); text-transform: uppercase; }
+
+    .dashboard-grid { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(280px, .65fr); }
+    .attention-row { min-height: 59px; display: grid; grid-template-columns: 58px minmax(0, 1fr) 96px; align-items: center; border-bottom: 1px solid var(--color-ink); }
+    .attention-row data { height: 100%; display: grid; place-items: center; border-right: 1px solid var(--color-ink); color: var(--color-accent); font: 900 18px var(--font-data); }
+    .attention-row div { min-width: 0; padding: 0 13px; }
+    .attention-row strong { display: block; font: 800 9px var(--font-data); text-transform: uppercase; }
+    .attention-row small { display: block; margin-top: 4px; color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+    .attention-row span { padding-right: 12px; color: var(--color-muted); font: 750 7px var(--font-data); text-align: right; text-transform: uppercase; }
+    .quick-strip { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); border-bottom: 2px solid var(--color-ink); }
+    .quick-strip button { min-height: 63px; display: grid; place-items: center; gap: 4px; border: 0; border-right: 1px solid var(--color-ink); background: transparent; cursor: pointer; font: 800 8px var(--font-data); text-transform: uppercase; }
+    .quick-strip button:last-child { border-right: 0; }
+    .quick-strip button:hover { color: white; background: var(--color-ink); }
+
+    .workbench { display: grid; grid-template-columns: minmax(290px, .75fr) minmax(0, 1.5fr) minmax(240px, .55fr); }
+    .workbench > .panel { min-height: 300px; }
+    .workbench .wide { grid-column: span 2; }
+    .ledger { grid-column: 1 / -1; }
+    .load-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+    .kit-map { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--color-ink); }
+    .kit-node { min-height: 84px; display: grid; align-content: center; gap: 8px; padding: 10px; border-right: 1px solid var(--color-ink); }
+    .kit-node:last-child { border-right: 0; }
+    .kit-node b { color: var(--color-accent); font: 900 16px var(--font-data); }
+    .kit-node span { font: 750 8px var(--font-data); overflow-wrap: anywhere; }
+    .check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--color-ink); }
+    .check { min-height: 52px; display: grid; grid-template-columns: 22px minmax(0, 1fr); align-items: center; gap: 8px; padding: 0 10px; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); font: 750 8px var(--font-data); text-transform: uppercase; }
+    .check:nth-child(2n) { border-right: 0; }
+    .check:nth-last-child(-n+2) { border-bottom: 0; }
+    .check i { width: 16px; height: 16px; display: grid; place-items: center; border: 1px solid var(--color-ink); color: white; background: var(--color-ink); font: 800 8px var(--font-data); font-style: normal; }
+
+    .fault-layout { display: grid; grid-template-columns: minmax(300px, .8fr) minmax(0, 1.3fr) minmax(250px, .65fr); }
+    .hazard-block { padding: 16px; color: white; background: var(--color-accent); }
+    .hazard-block .input { color: white; border-color: white; }
+    .hazard-block .input::placeholder { color: #ffd4d2; }
+    .type-matrix { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border: 1px solid var(--color-ink); }
+    .type-matrix button { min-height: 48px; border: 0; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); background: transparent; font: 800 8px var(--font-data); text-transform: uppercase; }
+    .type-matrix button:nth-child(2n) { border-right: 0; }
+    .type-matrix button:nth-last-child(-n+2) { border-bottom: 0; }
+    .type-matrix button.is-active { color: white; background: var(--color-ink); }
+
+    .movement-map { display: grid; grid-template-columns: minmax(0, 1fr) 80px minmax(0, 1fr); border: 1px solid var(--color-ink); }
+    .movement-point { min-height: 152px; display: grid; align-content: center; gap: 8px; padding: 15px; }
+    .movement-point span { font: 800 8px var(--font-data); text-transform: uppercase; }
+    .movement-point strong { font-size: 24px; overflow-wrap: anywhere; }
+    .movement-arrow { display: grid; place-items: center; border-inline: 1px solid var(--color-ink); color: var(--color-accent); font: 900 22px var(--font-data); }
+
+    .lookup-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; border-bottom: 2px solid var(--color-ink); }
+    .lookup-bar input { min-width: 0; height: 76px; padding: 0 20px; border: 0; color: var(--color-ink); background: transparent; font-size: clamp(22px, 3vw, 42px); font-weight: 900; letter-spacing: 0; outline: none; }
+    .lookup-bar button { width: 110px; border: 0; color: white; background: var(--color-accent); font: 900 11px var(--font-data); }
+    .dossier { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-bottom: 2px solid var(--color-ink); }
+    .dossier-cell { min-height: 88px; padding: 13px; border-right: 1px solid var(--color-ink); }
+    .dossier-cell:last-child { border-right: 0; }
+    .dossier-cell span { display: block; font: 800 8px var(--font-data); text-transform: uppercase; }
+    .dossier-cell strong { display: block; margin-top: 11px; font: 900 15px var(--font-data); overflow-wrap: anywhere; }
+
+    .verify-layout { display: grid; grid-template-columns: minmax(0, 1fr) 70px minmax(0, 1fr); border-bottom: 2px solid var(--color-ink); }
+    .verify-side .section-title { background: var(--color-paper-2); }
+    .verify-divider { display: grid; place-items: center; color: white; background: var(--color-ink); font: 900 12px var(--font-data); text-transform: uppercase; writing-mode: vertical-rl; }
+    .compare-row { min-height: 58px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 0 12px; border-bottom: 1px solid var(--color-ink); }
+    .compare-row:last-child { border-bottom: 0; }
+    .compare-row b { color: var(--color-accent); font: 900 13px var(--font-data); }
+    .compare-row strong { font: 800 9px var(--font-data); overflow-wrap: anywhere; }
+    .compare-row span { color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+
+    .review-layout { display: grid; grid-template-columns: minmax(280px, .8fr) minmax(0, 1.25fr) minmax(230px, .55fr); min-height: 570px; }
+    .review-list button { width: 100%; min-height: 66px; display: grid; grid-template-columns: 42px minmax(0, 1fr) auto; align-items: center; border: 0; border-bottom: 1px solid var(--color-ink); color: var(--color-ink); background: transparent; text-align: left; }
+    .review-list button.is-active { color: white; background: var(--color-ink); }
+    .review-list data { color: var(--color-accent); font: 900 14px var(--font-data); text-align: center; }
+    .review-list strong { font: 800 8px var(--font-data); text-transform: uppercase; }
+    .review-list small { display: block; margin-top: 4px; color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+    .review-list button.is-active small { color: #b9b9b5; }
+    .review-list span { padding-right: 10px; font: 750 7px var(--font-data); text-transform: uppercase; }
+    .evidence { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--color-ink); }
+    .evidence > div { min-height: 78px; padding: 13px; border-right: 1px solid var(--color-ink); }
+    .evidence > div:nth-child(2n) { border-right: 0; }
+    .evidence span { display: block; color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+    .evidence strong { display: block; margin-top: 9px; font: 900 10px var(--font-data); overflow-wrap: anywhere; }
+    .decision-stack { display: grid; gap: 8px; padding: 14px; }
+    .decision-stack .button { width: 100%; }
+
+    .settings-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(270px, .65fr); }
+    .settings-stack { display: grid; }
+    .theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: 1px solid var(--color-ink); }
+    .theme-option { min-height: 80px; display: grid; align-content: end; gap: 8px; padding: 10px; border-right: 1px solid var(--color-ink); background: transparent; }
+    .theme-option:last-child { border-right: 0; }
+    .theme-option i { width: 100%; height: 20px; display: block; border: 1px solid var(--color-ink); background: var(--color-paper); }
+    .theme-option:nth-child(2) i { background: var(--color-ink); }
+    .theme-option:nth-child(3) i { background: var(--color-paper); box-shadow: inset -36px 0 0 var(--color-ink); }
+    .theme-option span { font: 800 8px var(--font-data); text-transform: uppercase; }
+    .theme-option.is-active { box-shadow: inset 0 -5px 0 var(--color-accent); }
+
+    @container (max-width: 680px) {
+      .app { display: block; min-height: 844px; padding-bottom: 58px; }
+      .brand, .rail { display: none; }
+      .mast { min-height: 56px; grid-template-columns: minmax(0, 1fr) auto; }
+      .mast > * { padding: 0 10px; }
+      .mast-clock { display: none; }
+      .mast-user { border-right: 0; }
+      .main { min-height: 730px; }
+      .page-head { min-height: 0; grid-template-columns: 1fr; }
+      .page-title { padding: 16px 12px; border-right: 0; border-bottom: 1px solid var(--color-ink); }
+      .eyebrow span:last-child { display: none; }
+      .page-title h1 { margin-top: 12px; font-size: 48px; line-height: .86; }
+      .page-brief { grid-template-columns: auto minmax(0, 1fr); align-items: center; padding: 12px; }
+      .page-brief strong { font-size: 24px; }
+      .metric-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric { border-bottom: 1px solid var(--color-ink); }
+      .metric:nth-child(2n) { border-right: 0; }
+      .metric:last-child:nth-child(odd) { grid-column: 1 / -1; }
+      .quick-strip { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .quick-strip button:nth-child(n+5) { display: none; }
+      .dashboard-grid, .workbench, .fault-layout, .settings-layout { grid-template-columns: 1fr; }
+      .panel { border-right: 0; }
+      .workbench .wide, .ledger { grid-column: auto; }
+      .workbench > .panel { min-height: 0; }
+      .attention-row { grid-template-columns: 48px minmax(0, 1fr) 68px; }
+      .field-row { grid-template-columns: 1fr; }
+      .kit-map { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .kit-node { border-bottom: 1px solid var(--color-ink); }
+      .kit-node:nth-child(2n) { border-right: 0; }
+      .kit-node:nth-last-child(-n+2) { border-bottom: 0; }
+      .load-row { grid-template-columns: 1fr; }
+      .load-row .button { width: 100%; }
+      .movement-map { grid-template-columns: 1fr; }
+      .movement-arrow { min-height: 46px; border-inline: 0; border-block: 1px solid var(--color-ink); writing-mode: vertical-rl; }
+      .lookup-bar { grid-template-columns: minmax(0, 1fr) 70px; }
+      .lookup-bar input { height: 62px; padding: 0 12px; font-size: 22px; }
+      .lookup-bar button { width: 70px; }
+      .dossier { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .dossier-cell { border-bottom: 1px solid var(--color-ink); }
+      .dossier-cell:nth-child(2n) { border-right: 0; }
+      .dossier-cell:nth-last-child(-n+2) { border-bottom: 0; }
+      .verify-layout { grid-template-columns: 1fr; }
+      .verify-divider { min-height: 42px; writing-mode: horizontal-tb; }
+      .review-layout { grid-template-columns: 1fr; min-height: 0; }
+      .review-list button:nth-of-type(n+4) { display: none; }
+      .review-layout > .panel:nth-child(2) { order: -1; }
+      .evidence { grid-template-columns: 1fr; }
+      .evidence > div { border-right: 0; border-bottom: 1px solid var(--color-ink); }
+      .evidence > div:last-child { border-bottom: 0; }
+      .theme-options { grid-template-columns: 1fr; }
+      .theme-option { min-height: 54px; grid-template-columns: 72px minmax(0, 1fr); align-items: center; border-right: 0; border-bottom: 1px solid var(--color-ink); }
+      .theme-option:last-child { border-bottom: 0; }
+      .table-wrap table, .table-wrap thead, .table-wrap tbody { display: block; }
+      .table-wrap thead { display: none; }
+      .table-wrap tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-bottom: 1px solid var(--color-ink); }
+      .table-wrap tbody tr:last-child { border-bottom: 0; }
+      .table-wrap td { height: auto; min-height: 48px; display: grid; align-content: center; gap: 3px; border-right: 1px solid var(--color-ink); border-bottom: 1px solid var(--color-ink); }
+      .table-wrap td:nth-child(2n) { border-right: 0; }
+      .table-wrap td::before { content: attr(data-label); color: var(--color-muted); font: 750 7px var(--font-data); text-transform: uppercase; }
+      .mobile-nav { min-height: 58px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); position: sticky; bottom: 0; z-index: 20; border-top: 2px solid var(--color-ink); background: var(--color-paper); }
+      .mobile-nav button { min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; border: 0; border-right: 1px solid var(--color-ink); color: var(--color-ink); background: transparent; font: 750 7px var(--font-data); text-transform: uppercase; }
+      .mobile-nav button:last-child { border-right: 0; }
+      .mobile-nav button.is-active { color: white; background: var(--color-ink); }
+      .mobile-nav .icon { width: 16px; height: 16px; }
+    }
+
+    @media (max-width: 760px) {
+      .study-bar { grid-template-columns: 1fr auto; gap: 8px; }
+      .study-title { display: none; }
+      .route-picker { min-width: 0; }
+      .mode-control { grid-template-columns: repeat(2, 58px); }
+      .stage { min-height: 0; }
+      .preview, .preview.is-mobile { width: 100%; height: auto; min-height: calc(100vh - var(--control-h)); overflow: visible; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { transition-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></symbol>
+    <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5M12 22V12"/></symbol>
+    <symbol id="i-tool" viewBox="0 0 24 24"><path d="M14.7 6.3a4 4 0 0 0-5-5L7 4l3 3 2.7-2.7a4 4 0 0 0 2 2Z"/><path d="m8 8-6 6 4 4 6-6M16 12l6 6-4 4-6-6"/></symbol>
+    <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 2.9 1.8 17a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 2.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></symbol>
+    <symbol id="i-truck" viewBox="0 0 24 24"><path d="M10 17h4V5H2v12h3M14 9h4l4 4v4h-3"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="16.5" cy="17.5" r="2.5"/></symbol>
+    <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-8 9-4.5-1.5-8-4-8-9V5l8-3 8 3v8Z"/><path d="m9 12 2 2 4-4"/></symbol>
+    <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+    <symbol id="i-clip" viewBox="0 0 24 24"><rect x="5" y="4" width="14" height="17" rx="0"/><path d="M9 4V2h6v2M9 9h6M9 13h6M9 17h4"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.8 2.8-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.2h-4V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1L4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H2.8v-4H3a1.7 1.7 0 0 0 1.6-1 1.7 1.7 0 0 0-.3-1.9L4.2 7 7 4.2l.1.1A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.6v-.2h4V3a1.7 1.7 0 0 0 1 1.6 1.7 1.7 0 0 0 1.9-.3l.1-.1L19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.2v4H21a1.7 1.7 0 0 0-1.6 1Z"/></symbol>
+  </svg>
+
+  <header class="study-bar">
+    <div class="study-title">DTC Design Lab <span>/ Industrial System</span></div>
+    <div class="route-picker">
+      <button class="route-step" id="prev-page" aria-label="Previous page">&lt;</button>
+      <select class="route-select" id="route-select" aria-label="Choose route"></select>
+      <button class="route-step" id="next-page" aria-label="Next page">&gt;</button>
+    </div>
+    <div class="mode-control" aria-label="Preview size">
+      <button class="mode-button" data-mode="desktop" aria-selected="true">Desktop</button>
+      <button class="mode-button" data-mode="mobile" aria-selected="false">Mobile</button>
+    </div>
+  </header>
+  <main class="stage"><div class="preview" id="preview"><div id="app-root"></div></div></main>
+
+  <script>
+    const routes = [
+      ['dashboard', 'Dashboard'], ['register', 'Register'], ['install', 'Install'], ['fault', 'Fault'],
+      ['movement', 'Movement'], ['lookup', 'Lookup'], ['verify', 'Verify'], ['triage', 'Triage'],
+      ['review', 'Review'], ['settings', 'Settings']
+    ];
+    const icons = { dashboard:'grid', register:'box', install:'tool', fault:'alert', movement:'truck', lookup:'search', verify:'shield', triage:'list', review:'clip', settings:'settings' };
+    const icon = (name) => `<svg class="icon" aria-hidden="true"><use href="#i-${name}"></use></svg>`;
+    const serial = (slot, value) => `<div class="serial-field"><b>${slot}</b><input value="${value}" aria-label="${slot} device serial"><span>OK</span></div>`;
+    const status = (label, value, tone='') => `<div class="status-line"><dt>${label}</dt><dd class="${tone}">${value}</dd></div>`;
+    const cell = (label, value, sub='') => `<td data-label="${label}"><strong>${value}</strong>${sub ? `<small>${sub}</small>` : ''}</td>`;
+    const nav = (active) => routes.map(([key,label]) => `<button data-route="${key}" class="${key===active?'is-active':''}">${icon(icons[key])}<span>${label}</span></button>`).join('');
+    const mobileNav = (active) => ['dashboard','register','install','fault','review'].map((key) => `<button data-route="${key}" class="${key===active?'is-active':''}">${icon(icons[key])}<span>${key==='review'?'More':routes.find(r=>r[0]===key)[1]}</span></button>`).join('');
+    const head = (route, title, accent, eyebrow, big, brief) => `<section class="page-head"><div class="page-title"><div class="eyebrow"><span>[ ${eyebrow} ]</span><span>${route.toUpperCase()} / ACTIVE</span></div><h1>${title}${accent?`<br><em>${accent}</em>`:''}</h1></div><div class="page-brief"><strong class="${String(big).includes('!')?'danger':''}">${big}</strong><p>${brief}</p></div></section>`;
+    const shell = (route, content) => `<div class="app"><div class="brand"><img src="/dtc-logo.jpeg" alt="DTC Direct Trucking Company"></div><header class="mast"><div class="mast-id"><b>${String(routes.findIndex(r=>r[0]===route)+1).padStart(2,'0')}</b>DTC / E-Lock control system</div><div class="mast-clock">17.07.26 / 22:48 WAT</div><div class="mast-user"><i class="live-mark"></i>Supervisor / Musa</div></header><aside class="rail"><nav class="nav">${nav(route)}</nav><div class="rail-foot">System / Online<br>Revision / 03.0<br>Sync queue / 000</div></aside><main class="main">${content}</main><nav class="mobile-nav">${mobileNav(route)}</nav></div>`;
+
+    const pages = {
+      dashboard: () => `${head('dashboard','Fleet','378','Fleet operational register','32%','Registered fleet utilization. 822 mother locks remain available for assignment.')}<section class="metric-strip"><div class="metric is-red"><span>Open reviews</span><strong>38</strong><small>Decision required</small></div><div class="metric"><span>Registered kits</span><strong>1,188</strong><small>Total register</small></div><div class="metric"><span>In service</span><strong>378</strong><small>Active trucks</small></div><div class="metric"><span>Available mothers</span><strong>822</strong><small>Ready for install</small></div></section><section class="quick-strip"><button data-route="lookup">${icon('search')}Lookup</button><button data-route="verify">${icon('shield')}Verify</button><button data-route="register">${icon('box')}Register</button><button data-route="install">${icon('tool')}Install</button><button data-route="fault">${icon('alert')}Fault</button></section><section class="dashboard-grid"><div class="panel"><div class="section-title"><span>[ Attention register ]</span><b>38 / Open</b></div><div class="attention-row"><data>25</data><div><strong>Kit mismatch / Registry versus field state</strong><small>Verification route</small></div><span>Oldest first</span></div><div class="attention-row"><data>08</data><div><strong>Duplicate sub-lock / Serial conflict</strong><small>Manual decision</small></div><span>Review</span></div><div class="attention-row"><data>03</data><div><strong>Registration coverage / Incomplete</strong><small>Registry action</small></div><span>Review</span></div><div class="attention-row"><data>02</data><div><strong>Blocked registration / Sub-lock conflict</strong><small>Supervisor action</small></div><span>Review</span></div></div><div class="panel"><div class="section-title"><span>[ Fleet state ]</span><b>Live</b></div><dl class="status-list">${status('Registered kits','1,188')}${status('Assigned trucks','378')}${status('Available mothers','822')}${status('Faulty devices','0','red')}</dl></div></section>`,
+
+      register: () => `${head('register','Register','Kit','Device registration workbench','1,188','Capture the mother lock and three sub-locks as one controlled kit.')}<section class="workbench"><div class="panel"><div class="section-title"><span>[ Kit capture ]</span><b>Draft / 01</b></div><div class="panel-body stack">${serial('M','487068971398')}${serial('B','487068936383')}${serial('C','487068947612')}${serial('D','487068968618')}<div class="field"><label>SIM number</label><input class="input" value="8942340000000000000"></div><button class="button">Commit registration >>></button></div></div><div class="panel wide"><div class="section-title"><span>[ Registered kit ledger ]</span><b>1,188 / Owned</b></div><div class="lookup-bar"><input value="Search mother, sub-lock or SIM"><button>Find</button></div><div class="table-wrap"><table><thead><tr><th>Mother</th><th>Sub-locks</th><th>Ownership</th><th>Registered</th></tr></thead><tbody><tr>${cell('Mother','487068971398','Mother-only registration')}${cell('Sub-locks','B / C / D','3 assigned slots')}${cell('Ownership','Owned')}${cell('Registered','14 Jul','Musa')}</tr><tr>${cell('Mother','487068936383')}${cell('Sub-locks','3 configured')}${cell('Ownership','Owned')}${cell('Registered','14 Jul','Musa')}</tr><tr>${cell('Mother','487068947612')}${cell('Sub-locks','3 configured')}${cell('Ownership','Released','External')}${cell('Registered','13 Jul','Musa')}</tr><tr>${cell('Mother','487068968618')}${cell('Sub-locks','3 configured')}${cell('Ownership','Owned')}${cell('Registered','13 Jul','Musa')}</tr></tbody></table></div></div><div class="panel ledger"><div class="section-title"><span>[ Session telemetry ]</span><b>Ready</b></div><section class="metric-strip"><div class="metric"><span>Captured</span><strong>0</strong><small>This session</small></div><div class="metric"><span>Rejected</span><strong>0</strong><small>Duplicate serials</small></div><div class="metric"><span>Released</span><strong>-</strong><small>Batch action</small></div><div class="metric"><span>Sync queue</span><strong>0</strong><small>All uploaded</small></div></section></div></section>`,
+
+      install: () => `${head('install','Install','Truck','Truck and kit assignment','2,066','Every historical installation remains visible. Current assignment is separated from event history.')}<section class="workbench"><div class="panel"><div class="section-title"><span>[ Truck load ]</span><b>Step 01</b></div><div class="panel-body stack"><div class="field"><label>Truck plate</label><div class="load-row"><input class="input" value="FZE998DI"><button class="button">Load truck</button></div></div><dl class="status-list">${status('Current mother','487068971398')}${status('Serving company','DTC')}${status('Assignment','In service')}</dl></div></div><div class="panel wide"><div class="section-title"><span>[ Kit installation ]</span><b>Step 02</b></div><div class="panel-body stack"><div class="kit-map"><div class="kit-node"><b>M</b><span>487068971398</span></div><div class="kit-node"><b>B</b><span>487068936383</span></div><div class="kit-node"><b>C</b><span>487068947612</span></div><div class="kit-node"><b>D</b><span>487068968618</span></div></div><div class="check-grid"><div class="check"><i>X</i>Device responsive</div><div class="check"><i>X</i>Sub-locks responsive</div><div class="check"><i>X</i>Config confirmed</div><div class="check"><i>X</i>Physical check complete</div></div><button class="button">Queue installation event >>></button></div></div><div class="panel ledger"><div class="section-title"><span>[ Installation history ]</span><b>2,066 events</b></div><div class="table-wrap"><table><thead><tr><th>Truck</th><th>Mother / Kit</th><th>Company</th><th>Installed</th></tr></thead><tbody><tr>${cell('Truck','FZE998DI','Visible truck plate')}${cell('Mother / Kit','487068971398','3 unique sub-locks')}${cell('Company','DTC')}${cell('Installed','14 Jul 2026','Musa')}</tr><tr>${cell('Truck','Previous assignment')}${cell('Mother / Kit','487068936383','Historical event')}${cell('Company','DTC')}${cell('Installed','13 Jul 2026','Imported')}</tr><tr>${cell('Truck','Movement recorded')}${cell('Mother / Kit','487068947612','Historical event')}${cell('Company','DTC')}${cell('Installed','12 Jul 2026','Imported')}</tr></tbody></table></div></div></section>`,
+
+      fault: () => `${head('fault','Fault','Report','Incident capture and authority','00','No devices are currently waiting in the repair pool. Fault reporting remains available.')}<section class="fault-layout"><div class="panel"><div class="section-title"><span>[ Device lookup ]</span><b>Required</b></div><div class="hazard-block stack"><div class="field"><label>Mother / sub-lock / truck</label><input class="input" placeholder="Enter visible serial or plate"></div><button class="button secondary">Load device record</button></div><div class="section-title"><span>[ Fault type ]</span><b>Choose 01</b></div><div class="panel-body"><div class="type-matrix"><button class="is-active">Door will not lock</button><button>Battery fault</button><button>Offline device</button><button>Physical damage</button></div></div></div><div class="panel"><div class="section-title"><span>[ Incident details ]</span><b>Draft</b></div><div class="panel-body stack"><div class="field-row"><div class="field"><label>Reported by</label><select class="select"><option>Installer</option></select></div><div class="field"><label>Device online</label><select class="select"><option>Not checked</option></select></div></div><div class="field"><label>Truck location</label><input class="input" placeholder="Operational location"></div><div class="field"><label>Description</label><textarea class="textarea" placeholder="Describe observed behavior"></textarea></div><button class="button danger">Submit fault report >>></button></div></div><div class="panel"><div class="section-title"><span>[ Authority ]</span><b>Supervisor</b></div><dl class="status-list">${status('Static password','Not used')}${status('Authorized by','-')}${status('Incident status','Open','red')}${status('Closure by','-')}</dl><div class="section-title"><span>[ Current pool ]</span><b>Live</b></div><div class="empty"><div><strong>00</strong><span>No active repair items</span></div></div></div></section>`,
+
+      movement: () => `${head('movement','Move','Chain','Custody and equipment movement','000','A movement event preserves both the prior assignment and the new operational state.')}<section class="choice-grid"><button class="choice is-active">Truck reassignment</button><button class="choice">Kit replacement</button><button class="choice">Repair transfer</button></section><section class="workbench"><div class="panel wide"><div class="section-title"><span>[ Movement path ]</span><b>Pending confirmation</b></div><div class="panel-body"><div class="movement-map"><div class="movement-point"><span>Source</span><strong>FZE998DI</strong><small class="micro">Current assignment</small></div><div class="movement-arrow">>>></div><div class="movement-point"><span>Destination</span><strong>Truck plate</strong><small class="micro">Load destination</small></div></div></div></div><div class="panel"><div class="section-title"><span>[ Equipment ]</span><b>Kit</b></div><dl class="status-list">${status('Mother','487068971398')}${status('Sub-lock B','487068936383')}${status('Sub-lock C','487068947612')}${status('Sub-lock D','487068968618')}</dl></div><div class="panel ledger"><div class="section-title"><span>[ Movement event ]</span><b>Audit controlled</b></div><div class="panel-body field-row"><div class="field"><label>Movement reason</label><select class="select"><option>Operational reassignment</option></select></div><button class="button">Record movement >>></button></div></div></section>`,
+
+      lookup: () => `${head('lookup','Lookup','Asset','Unified truck and device dossier','01','One visible identity leads to current assignment, registration, ownership and full audit history.')}<section class="lookup-bar"><input value="FZE998DI"><button>${icon('search')}</button></section><section class="dossier"><div class="dossier-cell"><span>Truck</span><strong>FZE998DI</strong></div><div class="dossier-cell"><span>Mother lock</span><strong>487068971398</strong></div><div class="dossier-cell"><span>Serving company</span><strong>DTC</strong></div><div class="dossier-cell"><span>State</span><strong>In service</strong></div></section><section class="dashboard-grid"><div class="panel"><div class="section-title"><span>[ Equipment dossier ]</span><b>Current</b></div><div class="kit-map"><div class="kit-node"><b>M</b><span>487068971398</span></div><div class="kit-node"><b>B</b><span>487068936383</span></div><div class="kit-node"><b>C</b><span>487068947612</span></div><div class="kit-node"><b>D</b><span>487068968618</span></div></div><div class="section-title"><span>[ Latest audit trail ]</span><b>Full history</b></div><div class="attention-row"><data>01</data><div><strong>Installation recorded</strong><small>Kit assigned to FZE998DI</small></div><span>14 Jul</span></div><div class="attention-row"><data>02</data><div><strong>Verification passed</strong><small>Physical state confirmed</small></div><span>14 Jul</span></div><div class="attention-row"><data>03</data><div><strong>Registration created</strong><small>Mother and sub-lock kit</small></div><span>13 Jul</span></div></div><div class="panel"><div class="section-title"><span>[ Control state ]</span><b>Verified</b></div><dl class="status-list">${status('Ownership','Owned')}${status('Availability','Assigned')}${status('Review state','Clear')}${status('Last sync','Just now')}</dl></div></section>`,
+
+      verify: () => `${head('verify','Verify','Kit','Registry versus physical state','25!','Verification resolves a kit mismatch only when the physical scan matches the intended registry state.')}<section class="verify-layout"><div class="verify-side"><div class="section-title"><span>[ Registry state ]</span><b>Expected</b></div>${[['M','487068971398'],['B','487068936383'],['C','487068947612'],['D','487068968618']].map(([s,v])=>`<div class="compare-row"><b>${s}</b><strong>${v}</strong><span>Registered</span></div>`).join('')}</div><div class="verify-divider">Compare</div><div class="verify-side"><div class="section-title"><span>[ Physical scan ]</span><b>Observed</b></div>${[['M','487068971398'],['B','487068936383'],['C','Scan device'],['D','487068968618']].map(([s,v],i)=>`<div class="compare-row"><b>${s}</b><strong>${v}</strong><span>${i===2?'Missing':'Match'}</span></div>`).join('')}</div></section><section class="metric-strip"><div class="metric"><span>Truck</span><strong>FZE998DI</strong><small>Visible plate</small></div><div class="metric"><span>Matched</span><strong>3 / 4</strong><small>Physical scan</small></div><div class="metric is-red"><span>Difference</span><strong>01</strong><small>Slot C missing</small></div><div class="metric"><span>Resolution</span><strong>-</strong><small>Complete scan first</small></div></section><div class="footer-note"><span>Verification writes evidence before resolving review</span><button class="button">Complete verification >>></button></div>`,
+
+      triage: () => `${head('triage','Repair','00','Device disposition workbench','Clear','No devices are presently awaiting repair. The workbench remains ready for a reported fault.')}<section class="workbench"><div class="panel"><div class="section-title"><span>[ Repair pool ]</span><b>0 items</b></div><div class="empty"><div><strong>00</strong><span>No devices awaiting triage</span></div></div></div><div class="panel wide"><div class="section-title"><span>[ Selected device ]</span><b>None</b></div><div class="panel-body"><div class="choice-grid"><button class="choice">Return to service</button><button class="choice">Awaiting parts</button><button class="choice">Quarantine</button></div><dl class="status-list">${status('Device serial','-')}${status('Fault type','-')}${status('Truck','-')}${status('Reported','-')}</dl></div></div><div class="panel ledger"><div class="section-title"><span>[ Disposition rules ]</span><b>Controlled</b></div><div class="metric-strip"><div class="metric"><span>Repair pool</span><strong>0</strong><small>Active items</small></div><div class="metric"><span>Awaiting parts</span><strong>0</strong><small>Current state</small></div><div class="metric"><span>Quarantined</span><strong>0</strong><small>Unavailable</small></div><div class="metric"><span>Sync queue</span><strong>0</strong><small>All uploaded</small></div></div></div></section>`,
+
+      review: () => `${head('review','Review','38','Evidence and decision control','38!','Each review exposes source data, conflicting state, operational impact and the correct resolution route.')}<section class="review-layout"><div class="panel review-list"><div class="section-title"><span>[ Open queue ]</span><b>Oldest first</b></div><button class="is-active"><data>25</data><div><strong>Kit mismatch</strong><small>Registry versus physical state</small></div><span>Verify</span></button><button><data>08</data><div><strong>Duplicate sub-lock</strong><small>Serial appears in two kits</small></div><span>Review</span></button><button><data>03</data><div><strong>Registration issue</strong><small>Coverage incomplete</small></div><span>Correct</span></button><button><data>02</data><div><strong>Blocked registration</strong><small>Sub-lock conflict</small></div><span>Resolve</span></button></div><div class="panel"><div class="section-title"><span>[ Review 001 / Evidence ]</span><b>Kit mismatch</b></div><div class="evidence"><div><span>Truck</span><strong>FZE998DI</strong></div><div><span>Mother lock</span><strong>487068971398</strong></div><div><span>Registry state</span><strong>M + B + C + D</strong></div><div><span>Updated registry</span><strong>M + B + D + C</strong></div><div><span>Mismatch class</span><strong>Slot order only</strong></div><div><span>Operational impact</span><strong>None indicated</strong></div></div><div class="section-title"><span>[ Decision context ]</span><b>Verification route</b></div><div class="panel-body"><p class="micro">Slot order differences do not constitute an equipment conflict. Verify the physical kit against either valid arrangement. If confirmed, preserve evidence and close the import review.</p></div></div><div class="panel"><div class="section-title"><span>[ Action mode ]</span><b>Supervisor</b></div><div class="decision-stack"><button class="button">Open verification</button><button class="button secondary">Update registry</button><button class="button danger">Resolve review</button><button class="button secondary">Dismiss with reason</button></div><dl class="status-list">${status('Source','Workbook import')}${status('Created','14 Jul 2026')}${status('Audit required','Yes','red')}</dl></div></section>`,
+
+      settings: () => `${head('settings','System','Settings','Access, profile and data controls','SUP','Supervisor sees team, profile, appearance and exports. Installer access remains appearance-only.')}<section class="settings-layout"><div class="panel"><div class="section-title"><span>[ Team access ]</span><b>Supervisor only</b></div><div class="table-wrap"><table><thead><tr><th>User</th><th>Role</th><th>Status</th><th>Action</th></tr></thead><tbody><tr>${cell('User','Musa','Current user')}${cell('Role','Supervisor')}${cell('Status','Active')}${cell('Action','Manage')}</tr><tr>${cell('User','Installer account')}${cell('Role','Installer')}${cell('Status','Active')}${cell('Action','Manage')}</tr></tbody></table></div><div class="footer-note"><span>Add user form opens inside this section</span><button class="button">+ Add user</button></div><div class="section-title"><span>[ Data management ]</span><b>Exports</b></div><div class="panel-body field-row"><div><strong class="label">Operational export</strong><p class="micro">Registration, installation, movement, fault and audit data.</p></div><button class="button secondary">Open exports >>></button></div></div><div class="settings-stack"><div class="panel"><div class="section-title"><span>[ Profile ]</span><b>Musa</b></div><dl class="status-list">${status('Role','Supervisor')}${status('Password','Change')}${status('Session','Sign out','red')}</dl></div><div class="panel"><div class="section-title"><span>[ Appearance ]</span><b>System</b></div><div class="panel-body"><div class="theme-options"><button class="theme-option"><i></i><span>Light</span></button><button class="theme-option"><i></i><span>Dark</span></button><button class="theme-option is-active"><i></i><span>System</span></button></div></div></div></div></section>`
+    };
+
+    const routeSelect = document.getElementById('route-select');
+    const preview = document.getElementById('preview');
+    const root = document.getElementById('app-root');
+    let currentRoute = 'dashboard';
+    let currentMode = 'desktop';
+
+    routes.forEach(([key,label], index) => {
+      const option = document.createElement('option');
+      option.value = key;
+      option.textContent = `${String(index + 1).padStart(2,'0')} / ${label}`;
+      routeSelect.appendChild(option);
+    });
+
+    function updateHash() { history.replaceState(null, '', `#${currentRoute}/${currentMode}`); }
+    function render() {
+      routeSelect.value = currentRoute;
+      preview.classList.toggle('is-mobile', currentMode === 'mobile');
+      document.querySelectorAll('.mode-button').forEach((button) => button.setAttribute('aria-selected', String(button.dataset.mode === currentMode)));
+      root.innerHTML = shell(currentRoute, pages[currentRoute]());
+      root.querySelectorAll('[data-route]').forEach((button) => button.addEventListener('click', () => selectRoute(button.dataset.route)));
+      preview.scrollTo({ top: 0, behavior: 'instant' });
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      updateHash();
+    }
+    function selectRoute(route) { if (pages[route]) { currentRoute = route; render(); } }
+    function stepRoute(direction) { const index = routes.findIndex(([key]) => key === currentRoute); selectRoute(routes[(index + direction + routes.length) % routes.length][0]); }
+    routeSelect.addEventListener('change', () => selectRoute(routeSelect.value));
+    document.getElementById('prev-page').addEventListener('click', () => stepRoute(-1));
+    document.getElementById('next-page').addEventListener('click', () => stepRoute(1));
+    document.querySelectorAll('.mode-button').forEach((button) => button.addEventListener('click', () => { currentMode = button.dataset.mode; render(); }));
+    const [hashRoute, hashMode] = location.hash.slice(1).split('/');
+    if (pages[hashRoute]) currentRoute = hashRoute;
+    if (hashMode === 'mobile') currentMode = 'mobile';
+    render();
+  </script>
+</body>
+</html>

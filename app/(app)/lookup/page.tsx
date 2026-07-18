@@ -5,6 +5,7 @@ import { offlineDb } from '../../../lib/offline/db';
 import {
   Badge,
   DataTable,
+  IndustrialPageHeader,
   Panel,
   ReviewCard,
   StatusList,
@@ -173,13 +174,14 @@ export default function LookupPage() {
 
   return (
     <main className="lookup-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Lookup</h1>
-          <p>{targetLabel}</p>
-        </div>
-        {loading && <Badge tone="warning">Loading</Badge>}
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Unified truck and device dossier"
+        title="Lookup"
+        accent="Asset"
+        metric={view ? '01' : '00'}
+        description="One visible identity leads to assignment, registration, ownership and audit history."
+        status={loading ? <Badge tone="warning">Loading</Badge> : <Badge tone="muted">{targetLabel}</Badge>}
+      />
 
       {error && <p className="banner banner--error">{error}</p>}
 
@@ -296,7 +298,7 @@ export default function LookupPage() {
 function formatClientTimestamp(value: number): string {
   if (!value) return '-';
   const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',

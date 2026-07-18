@@ -6,7 +6,7 @@ import { authOptions } from '../../../../lib/auth';
 import { sqlite } from '../../../../db';
 import { requireSupervisor } from '../../../../services/auth.service';
 import { listExportSummaries, type ExportDatasetKey } from '../../../../services/data-management.service';
-import { Badge, Panel, StatusList } from '../../_components/ProductUI';
+import { Badge, IndustrialPageHeader, Panel, StatusList } from '../../_components/ProductUI';
 
 export default async function DataManagementPage() {
   const session = await getServerSession(authOptions);
@@ -26,13 +26,14 @@ export default async function DataManagementPage() {
 
   return (
     <main className="settings-cockpit data-management-cockpit">
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Data management</h1>
-          <p>Export operational records</p>
-        </div>
-        <Badge tone="ok">Supervisor only</Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Operational data control"
+        title="Data"
+        accent="Exports"
+        metric={totalRows.toLocaleString()}
+        description="Export registration, installation, movement, fault and audit records without changing source data."
+        status={<Badge tone="ok">Supervisor only</Badge>}
+      />
 
       <section className="settings-summary" aria-label="Export summary">
         <article className="settings-metric" data-tone="blue">

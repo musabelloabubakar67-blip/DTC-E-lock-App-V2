@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { signOut } from 'next-auth/react';
 import { useState, type ReactNode } from 'react';
 import { Database, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
-import { Badge, DataTable, Panel } from '../_components/ProductUI';
+import { Badge, DataTable, IndustrialPageHeader, Panel } from '../_components/ProductUI';
 import type { SettingsData } from '../../../services/settings.service';
 import type { SettingsActionState } from './actions';
 
@@ -39,13 +39,14 @@ export default function SettingsClient({
 
   return (
     <main className="settings-cockpit" data-role={currentRole}>
-      <div className="lookup-cockpit__header">
-        <div>
-          <h1>Settings</h1>
-          <p>{settings.organisation?.name ?? 'Organisation settings'}</p>
-        </div>
-        <Badge tone={canManageUsers ? 'ok' : 'muted'}>{canManageUsers ? 'Supervisor controls' : 'Personal settings'}</Badge>
-      </div>
+      <IndustrialPageHeader
+        eyebrow="Access, profile and data controls"
+        title="System"
+        accent="Settings"
+        metric={currentRole === 'supervisor' ? 'SUP' : 'INS'}
+        description="Team access, profile, appearance and data controls follow existing role permissions."
+        status={<Badge tone={canManageUsers ? 'ok' : 'muted'}>{canManageUsers ? 'Supervisor controls' : 'Personal settings'}</Badge>}
+      />
 
       <section className="settings-summary" aria-label="Settings summary">
         <SettingsMetric icon={<LogOut />} label="Profile" value={currentUser?.displayName ?? 'User'} detail={currentRole} tone="green" />
@@ -256,7 +257,7 @@ function SettingsMetric({
 }
 
 function formatDate(value: number) {
-  return new Intl.DateTimeFormat(undefined, {
+  return new Intl.DateTimeFormat("en-GB", {
     month: 'short',
     day: 'numeric',
     hour: '2-digit',
