@@ -20,17 +20,32 @@ export default function PwaRegistration() {
       return;
     }
 
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let refreshing = false;
+    const handleControllerChange = () => {
+      if (!hadController || refreshing) return;
+      refreshing = true;
+      window.location.reload();
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', handleControllerChange);
+
     const register = () => {
-      void navigator.serviceWorker.register('/sw.js', { scope: '/' });
+      void navigator.serviceWorker
+        .register('/sw.js', { scope: '/', updateViaCache: 'none' })
+        .then((registration) => registration.update())
+        .catch((error: unknown) => console.error('Service worker registration failed', error));
     };
 
     if (document.readyState === 'complete') {
       register();
-      return;
+      return () => navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
     }
 
     window.addEventListener('load', register, { once: true });
-    return () => window.removeEventListener('load', register);
+    return () => {
+      window.removeEventListener('load', register);
+      navigator.serviceWorker.removeEventListener('controllerchange', handleControllerChange);
+    };
   }, []);
 
   return null;

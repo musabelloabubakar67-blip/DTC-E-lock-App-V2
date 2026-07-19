@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react';
 import SyncIndicator from './SyncIndicator';
 import Nav, { type NavRole } from './Nav';
 import { useOnlineStatus } from '../../../lib/offline/use-sync-status';
+import { classifyAppViewport, type AppViewport } from '../../../lib/ui/viewport';
 
 export default function AppShell({
   children,
@@ -20,18 +21,14 @@ export default function AppShell({
   compactMode: boolean;
 }) {
   const online = useOnlineStatus();
-  const [viewport, setViewport] = useState<'phone' | 'tablet-portrait' | 'tablet-landscape' | 'desktop' | null>(null);
+  const [viewport, setViewport] = useState<AppViewport | null>(null);
 
   useEffect(() => {
     const classifyViewport = () => {
       const width = window.visualViewport?.width ?? window.innerWidth;
       const shortestScreenSide = Math.min(window.screen.width, window.screen.height);
 
-      if (shortestScreenSide >= 560 && width <= 1100) {
-        setViewport(width <= 900 ? 'tablet-portrait' : 'tablet-landscape');
-      } else {
-        setViewport(width <= 760 ? 'phone' : 'desktop');
-      }
+      setViewport(classifyAppViewport(width, shortestScreenSide));
     };
 
     classifyViewport();

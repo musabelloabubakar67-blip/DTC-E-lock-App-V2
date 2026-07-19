@@ -5,7 +5,6 @@
 import Link from 'next/link';
 import { AlertTriangle, Boxes, ClipboardCheck, House, ListChecks, PackagePlus, Search, Settings, ShieldCheck, Truck, Wrench } from 'lucide-react';
 import { usePathname } from 'next/navigation';
-import { useState } from 'react';
 
 export type NavRole = 'installer' | 'supervisor' | null;
 
@@ -34,7 +33,6 @@ const SETTINGS_LINK: NavLink = { href: '/settings', label: 'Settings', icon: 'se
 
 export default function Nav({ role }: { role: NavRole }) {
   const pathname = usePathname();
-  const [moreOpen, setMoreOpen] = useState(false);
 
   const roleLinks = INSTALLER_LINKS.map((link) =>
     role === 'supervisor' && link.label === 'Repairs' ? { ...link, href: '/triage' } : link,
@@ -47,38 +45,44 @@ export default function Nav({ role }: { role: NavRole }) {
 
   const isActive = (link: NavLink) => pathname === link.href || Boolean(link.activeOn?.includes(pathname));
 
+  const renderSecondaryLinks = () => secondaryLinks.map((link) => (
+    <Link
+      key={link.href}
+      className="nav__link"
+      href={link.href}
+      data-active={isActive(link)}
+      data-context-only={link.contextOnly || undefined}
+      data-mobile-primary="false"
+    >
+      <span className="nav__icon" aria-hidden="true">
+        <NavIcon name={link.icon} />
+      </span>
+      {link.label}
+    </Link>
+  ));
+
   return (
-    <nav className="nav" aria-label="Main navigation" data-more-open={moreOpen}>
+    <nav className="nav" aria-label="Main navigation">
       {primaryLinks.map((link) => (
-        <Link key={link.href} className="nav__link" href={link.href} data-active={isActive(link)} data-mobile-primary="true" onClick={() => setMoreOpen(false)}>
+        <Link key={link.href} className="nav__link" href={link.href} data-active={isActive(link)} data-mobile-primary="true">
           <span className="nav__icon" aria-hidden="true">
             <NavIcon name={link.icon} />
           </span>
           {link.label}
         </Link>
       ))}
-      <div className="nav__more-panel" aria-hidden={!moreOpen}>
-        {secondaryLinks.map((link) => (
-          <Link
-            key={link.href}
-            className="nav__link"
-            href={link.href}
-            data-active={isActive(link)}
-            data-context-only={link.contextOnly || undefined}
-            data-mobile-primary="false"
-            onClick={() => setMoreOpen(false)}
-          >
-            <span className="nav__icon" aria-hidden="true">
-              <NavIcon name={link.icon} />
-            </span>
-            {link.label}
-          </Link>
-        ))}
+      <div className="nav__more-panel nav__more-panel--desktop">
+        {renderSecondaryLinks()}
       </div>
-      <button className="nav__more" type="button" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}>
-        <span className="nav__more-dots" aria-hidden="true"><i /><i /><i /></span>
-        More
-      </button>
+      <details className="nav__more-menu">
+        <summary className="nav__more">
+          <span className="nav__more-dots" aria-hidden="true"><i /><i /><i /></span>
+          More
+        </summary>
+        <div className="nav__more-panel nav__more-panel--mobile">
+          {renderSecondaryLinks()}
+        </div>
+      </details>
     </nav>
   );
 }

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const STATIC_CACHE = `dtc-elock-static-${CACHE_VERSION}`;
 const PRECACHE = ['/offline.html', '/manifest.json', '/dtc-app-icon-light.svg', '/dtc-logo.jpeg'];
 
@@ -13,10 +13,12 @@ self.addEventListener('install', (event) => {
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches
-      .keys()
-      .then((keys) => Promise.all(keys.filter((key) => key.startsWith('dtc-elock-') && key !== STATIC_CACHE).map((key) => caches.delete(key))))
-      .then(() => self.clients.claim()),
+    Promise.all([
+      caches
+        .keys()
+        .then((keys) => Promise.all(keys.filter((key) => key.startsWith('dtc-elock-') && key !== STATIC_CACHE).map((key) => caches.delete(key)))),
+      self.registration.navigationPreload?.enable(),
+    ]).then(() => self.clients.claim()),
   );
 });
 
@@ -29,7 +31,11 @@ self.addEventListener('fetch', (event) => {
   if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/_next/data/')) return;
 
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(() => caches.match('/offline.html')));
+    event.respondWith(
+      Promise.resolve(event.preloadResponse)
+        .then((preloaded) => preloaded || fetch(request))
+        .catch(() => caches.match('/offline.html')),
+    );
     return;
   }
 

@@ -371,7 +371,8 @@
 .app-shell .nav__link[data-active="true"]::after { content: "///"; color: var(--industrial-red); font: 900 var(--industrial-type-label) var(--industrial-data); }
 .app-shell .nav__icon { width: 20px; height: 20px; display: grid; place-items: center; color: currentColor; background: transparent; }
 .app-shell .nav__icon svg { width: 18px; height: 18px; filter: none; }
-.app-shell .nav__more-panel { display: contents; }
+.app-shell .nav__more-panel--desktop { display: contents; }
+.app-shell .nav__more-menu { display: none; }
 .app-shell .nav__more { display: none; }
 
 @media (min-width: 761px) {
@@ -971,17 +972,33 @@
     text-align: center;
   }
   .app-shell .nav__link[data-active="true"]::after { display: none; }
-  .app-shell .nav__more-panel {
+  .app-shell .nav__more-panel--desktop { display: none; }
+  .app-shell .nav__more-menu {
+    min-width: 0;
+    height: 58px;
+    display: block;
+  }
+  .app-shell .nav__more-menu .nav__more-panel--mobile {
     display: none;
     position: fixed;
     inset: auto 0 58px;
+    z-index: 81;
     max-height: min(62vh, 440px);
     overflow-y: auto;
     border-top: 2px solid var(--industrial-rule);
     background: var(--industrial-paper);
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(8px);
   }
-  .app-shell .nav[data-more-open="true"] .nav__more-panel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .app-shell .nav__more-panel .nav__link { min-height: 52px; border-right: 1px solid var(--industrial-rule); }
+  .app-shell .nav__more-menu[open] .nav__more-panel--mobile {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    opacity: 1;
+    pointer-events: auto;
+    transform: translateY(0);
+  }
+  .app-shell .nav__more-panel--mobile .nav__link { min-height: 52px; border-right: 1px solid var(--industrial-rule); }
   .app-shell .nav__more {
     min-width: 0;
     min-height: 56px;
@@ -994,7 +1011,11 @@
     background: var(--industrial-paper);
     font: 750 var(--industrial-type-meta) var(--industrial-data);
     text-transform: uppercase;
+    list-style: none;
+    cursor: pointer;
+    touch-action: manipulation;
   }
+  .app-shell .nav__more::-webkit-details-marker { display: none; }
   .app-shell .nav__more:hover { color: var(--industrial-active-ink); background: var(--industrial-active-bg); }
   .app-shell .nav__more-dots { display: flex; gap: 3px; }
   .app-shell .nav__more-dots i { width: 3px; height: 3px; background: currentColor; }

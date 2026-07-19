@@ -19,6 +19,10 @@ const nextConfig = {
     return [
       { source: '/:path*', headers: commonHeaders },
       {
+        source: '/sw.js',
+        headers: [{ key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' }],
+      },
+      {
         source: '/api/:path*',
         headers: [{ key: 'Cache-Control', value: 'private, no-store, max-age=0' }],
       },
