@@ -1,9 +1,28 @@
 {
   "name": "DTC E-Lock",
-  "short_name": "E-Lock",
+  "short_name": "DTC E-Lock",
+  "description": "DTC fleet e-lock operations console",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
-  "background_color": "#ffffff",
-  "theme_color": "#ffffff",
-  "icons": []
+  "orientation": "portrait-primary",
+  "background_color": "#efefea",
+  "theme_color": "#efefea",
+  "lang": "en",
+  "categories": ["business", "productivity", "utilities"],
+  "icons": [
+    {
+      "src": "/dtc-app-icon-light.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/dtc-app-icon-light.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "maskable"
+    }
+  ]
 }

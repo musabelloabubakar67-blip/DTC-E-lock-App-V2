@@ -14,7 +14,12 @@ export type AuthenticatedUser = {
 export function requireAuthenticated(
   user: AuthenticatedUser | null | undefined,
 ): AuthenticatedUser {
-  if (!user) {
+  if (
+    !user
+    || !user.id
+    || !user.orgId
+    || (user.role !== 'installer' && user.role !== 'supervisor')
+  ) {
     throw new AuthzError('Authentication required');
   }
   return user;

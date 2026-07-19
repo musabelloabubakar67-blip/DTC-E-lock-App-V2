@@ -8,11 +8,12 @@ import LoginForm from './LoginForm';
 export default async function LoginPage() {
   const session = await getServerSession(authOptions);
 
-  if (session?.user) {
+  if (session?.user?.id) {
     redirect('/');
   }
 
-  const rawTheme = cookies().get('dtc-theme')?.value ?? 'system';
+  const cookieStore = await cookies();
+  const rawTheme = cookieStore.get('dtc-theme')?.value ?? 'system';
   const theme = rawTheme === 'light' || rawTheme === 'dark' ? rawTheme : 'system';
 
   return (
@@ -52,7 +53,7 @@ export default async function LoginPage() {
           <dl className="login-status-grid" aria-label="Session requirements">
             <div>
               <dt>Session</dt>
-              <dd>30-day token</dd>
+              <dd>7-day token</dd>
             </div>
             <div>
               <dt>Authority</dt>

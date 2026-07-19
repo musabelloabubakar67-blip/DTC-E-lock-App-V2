@@ -31,7 +31,7 @@ describe('movement.service — swap-conflict helper', () => {
     expect(conflict).toEqual({ action: 'blocked', code: 'in_service_elsewhere', currentTruckId: truckA });
 
     // Resolve via truck_swap — one transaction, both sides move.
-    db.transaction((tx: typeof db) => {
+    db.transaction((tx) => {
       resolveTruckSwap(tx, { deviceId, toTruckId: truckB, actorUserId: installerId });
     });
 
@@ -137,7 +137,7 @@ describe('movement.service — swap atomicity under failure (hardening)', () => 
     // db.transaction() isn't atomic, truck A's assignment would end up closed with no
     // replacement — a device silently vanishing from the fleet. That's the failure mode this
     // proves does NOT happen.
-    function makeFailAfterFirstSideProxy(realTx: typeof db) {
+    function makeFailAfterFirstSideProxy<T extends object>(realTx: T): T {
       let truckAssignmentInsertSeen = false;
       return new Proxy(realTx, {
         get(target, prop, receiver) {
@@ -153,11 +153,11 @@ describe('movement.service — swap atomicity under failure (hardening)', () => 
           const orig = Reflect.get(target, prop, receiver);
           return typeof orig === 'function' ? orig.bind(target) : orig;
         },
-      }) as typeof db;
+      }) as T;
     }
 
     expect(() => {
-      db.transaction((tx: typeof db) => {
+      db.transaction((tx) => {
         const failingTx = makeFailAfterFirstSideProxy(tx);
         resolveTruckSwap(failingTx, { deviceId, toTruckId: truckB, actorUserId: installerId });
       });

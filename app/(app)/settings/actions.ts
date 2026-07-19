@@ -85,8 +85,9 @@ export async function setAppearanceAction(formData: FormData): Promise<void> {
   const mode: AppearanceMode = rawMode === 'light' || rawMode === 'dark' ? rawMode : 'system';
   const compactMode = String(formData.get('compactMode') ?? '') === 'true';
 
-  cookies().set('dtc-theme', mode, { sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 365 });
-  cookies().set('dtc-compact-mode', compactMode ? 'true' : 'false', {
+  const cookieStore = await cookies();
+  cookieStore.set('dtc-theme', mode, { sameSite: 'lax', path: '/', maxAge: 60 * 60 * 24 * 365 });
+  cookieStore.set('dtc-compact-mode', compactMode ? 'true' : 'false', {
     sameSite: 'lax',
     path: '/',
     maxAge: 60 * 60 * 24 * 365,

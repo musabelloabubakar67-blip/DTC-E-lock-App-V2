@@ -13,6 +13,7 @@ declare module 'next-auth' {
     id: string;
     orgId: string;
     role: 'installer' | 'supervisor';
+    sessionVersion: number;
   }
 }
 
@@ -21,5 +22,7 @@ declare module 'next-auth/jwt' {
     id: string;
     orgId: string;
     role: 'installer' | 'supervisor';
+    sessionVersion: number;
+    revoked?: boolean;
   }
 }

@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import { useEffect, useState } from 'react';
 import SyncIndicator from './SyncIndicator';
 import Nav, { type NavRole } from './Nav';
 import { useOnlineStatus } from '../../../lib/offline/use-sync-status';
@@ -19,9 +20,36 @@ export default function AppShell({
   compactMode: boolean;
 }) {
   const online = useOnlineStatus();
+  const [viewport, setViewport] = useState<'phone' | 'tablet-portrait' | 'tablet-landscape' | 'desktop' | null>(null);
+
+  useEffect(() => {
+    const classifyViewport = () => {
+      const width = window.visualViewport?.width ?? window.innerWidth;
+      const shortestScreenSide = Math.min(window.screen.width, window.screen.height);
+
+      if (shortestScreenSide >= 560 && width <= 1100) {
+        setViewport(width <= 900 ? 'tablet-portrait' : 'tablet-landscape');
+      } else {
+        setViewport(width <= 760 ? 'phone' : 'desktop');
+      }
+    };
+
+    classifyViewport();
+    window.addEventListener('resize', classifyViewport);
+    window.visualViewport?.addEventListener('resize', classifyViewport);
+    return () => {
+      window.removeEventListener('resize', classifyViewport);
+      window.visualViewport?.removeEventListener('resize', classifyViewport);
+    };
+  }, []);
 
   return (
-    <div className="app-shell" data-theme={theme} data-density={compactMode ? 'compact' : 'standard'}>
+    <div
+      className="app-shell"
+      data-theme={theme}
+      data-density={compactMode ? 'compact' : 'standard'}
+      data-viewport={viewport ?? undefined}
+    >
       <header className="app-topbar">
         <div className="app-topbar__brand">
           <span className="app-topbar__menu" aria-hidden="true">

@@ -86,7 +86,7 @@ export default function SettingsClient({
                   </label>
                   <label>
                     <span>Temporary password</span>
-                    <input name="password" type="password" minLength={8} required />
+                    <input name="password" type="password" minLength={12} required />
                   </label>
                   <label>
                     <span>Role</span>
@@ -170,11 +170,11 @@ export default function SettingsClient({
               </label>
               <label>
                 <span>New password</span>
-                <input name="newPassword" type="password" autoComplete="new-password" minLength={8} required />
+                <input name="newPassword" type="password" autoComplete="new-password" minLength={12} required />
               </label>
               <label>
                 <span>Confirm new password</span>
-                <input name="confirmPassword" type="password" autoComplete="new-password" minLength={8} required />
+                <input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required />
               </label>
               {passwordState.status !== 'idle' && (
                 <p className={`banner ${passwordState.status === 'error' ? 'banner--error' : 'banner--success'}`}>

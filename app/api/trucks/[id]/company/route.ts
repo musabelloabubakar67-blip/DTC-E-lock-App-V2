@@ -15,8 +15,9 @@ const changeTruckCompanySchema = z.object({
   notes: z.string().optional(),
 });
 
-export async function POST(request: Request, { params }: { params: { id: string } }) {
+export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const session = await getServerSession(authOptions);
+  const { id } = await params;
 
   try {
     const user = requireAuthenticated(
@@ -34,7 +35,7 @@ export async function POST(request: Request, { params }: { params: { id: string 
 
     const result = changeTruckCompany(db, {
       orgId: user.orgId,
-      truckId: params.id,
+      truckId: id,
       company: parsed.data.company,
       notes: parsed.data.notes,
       actor: user, // requireSupervisor() runs inside changeTruckCompany — service is the source of truth

@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0a0c0e" />
+    <title>DTC E-Lock — Offline</title>
+    <style>
+      * { box-sizing: border-box; border-radius: 0; }
+      body { margin: 0; min-height: 100svh; display: grid; color: #f1f3ef; background: #0f1113; font-family: Arial, Helvetica, sans-serif; }
+      main { min-height: 100svh; display: grid; grid-template-rows: 64px minmax(0, 1fr) 48px; border: 1px solid #343a40; }
+      header, footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 0 20px; background: #0a0c0e; border-bottom: 1px solid #343a40; font: 800 11px/1.2 Consolas, monospace; text-transform: uppercase; }
+      footer { border-top: 1px solid #343a40; border-bottom: 0; color: #aeb5b8; }
+      header img { width: 122px; height: 44px; object-fit: contain; filter: grayscale(1) contrast(1.8) invert(1); mix-blend-mode: screen; }
+      header span { display: inline-flex; align-items: center; gap: 8px; }
+      header i { width: 8px; height: 8px; background: #ff473d; }
+      section { display: grid; align-content: center; gap: 22px; padding: clamp(24px, 6vw, 72px); }
+      small { color: #aeb5b8; font: 800 11px/1.3 Consolas, monospace; text-transform: uppercase; }
+      h1 { margin: 0; max-width: 8ch; font-size: clamp(54px, 12vw, 124px); line-height: .82; text-transform: uppercase; }
+      h1 em { color: #ff473d; font-style: normal; }
+      p { max-width: 48ch; margin: 0; color: #aeb5b8; font: 750 12px/1.6 Consolas, monospace; text-transform: uppercase; }
+      button { width: min(100%, 320px); min-height: 48px; padding: 0 16px; color: #101214; background: #e8eae6; border: 1px solid #e8eae6; font: 900 12px Consolas, monospace; text-transform: uppercase; }
+      @media (max-width: 600px) { main { grid-template-rows: 56px minmax(0, 1fr) 44px; } header { padding: 0 14px; } header > strong { display: none; } section { padding: 24px 16px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="/dtc-logo.jpeg" alt="DTC Direct Trucking Company" />
+        <strong>DTC / E-Lock control system</strong>
+        <span><i aria-hidden="true"></i>Offline</span>
+      </header>
+      <section>
+        <small>[ Network unavailable ]</small>
+        <h1>Connection <em>lost</em></h1>
+        <p>Already-open field forms remain in their local queue. Reconnect before starting a new session.</p>
+        <button type="button" onclick="location.reload()">Retry connection</button>
+      </section>
+      <footer><span>Queue protected locally</span><span>Rev / 03.0</span></footer>
+    </main>
+  </body>
+</html>

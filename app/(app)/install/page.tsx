@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MessageCircle } from 'lucide-react';
 import { offlineDb } from '../../../lib/offline/db';
 import type { InstallKitFormValues } from '../../../lib/validations/installation';
 import {
@@ -14,6 +15,10 @@ import {
   formatTimestamp,
 } from '../_components/ProductUI';
 import { submitInstallation, type SubmitInstallationResult } from './actions';
+import {
+  buildInstallationWhatsAppUrl,
+  type InstallationShareDetails,
+} from './whatsapp';
 
 type Checklist = NonNullable<InstallKitFormValues['checklist']>;
 
@@ -67,6 +72,7 @@ const emptyForm: InstallKitFormValues = {
 
 const subSlots = ['B', 'C', 'D'] as const;
 const historyPageSize = 5;
+const installationShareStorageKey = 'dtc-elock:pending-installation-share';
 
 export default function InstallPage() {
   const [form, setForm] = useState<InstallKitFormValues>(emptyForm);
@@ -83,12 +89,40 @@ export default function InstallPage() {
   const [loadedTruckLabel, setLoadedTruckLabel] = useState<string | null>(null);
   const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'error'>('idle');
   const [showHistoryArchive, setShowHistoryArchive] = useState(false);
+  const [shareDetails, setShareDetails] = useState<InstallationShareDetails | null>(null);
+  const sharePanelRef = useRef<HTMLElement>(null);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('archive') === '1') {
       setShowHistoryArchive(true);
     }
+
+    try {
+      const storedShare = window.localStorage.getItem(installationShareStorageKey);
+      if (!storedShare) return;
+      const parsedShare = JSON.parse(storedShare) as unknown;
+      if (isInstallationShareDetails(parsedShare)) setShareDetails(parsedShare);
+    } catch {
+      window.localStorage.removeItem(installationShareStorageKey);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!shareDetails) return;
+
+    const positionHandoverPanel = () => {
+      sharePanelRef.current?.scrollIntoView({ block: 'start', behavior: 'auto' });
+    };
+    const frame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(positionHandoverPanel);
+    });
+    const settledLayoutCheck = window.setTimeout(positionHandoverPanel, 180);
+
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(settledLayoutCheck);
+    };
+  }, [shareDetails]);
 
   useEffect(() => {
     if (!showHistoryArchive) return;
@@ -175,9 +209,17 @@ export default function InstallPage() {
       return;
     }
 
+    const completedInstallation: InstallationShareDetails = {
+      truck: truckDisplayLabel,
+      company: form.company,
+      mother: currentKit?.mother.serial ?? form.motherDeviceId,
+      subs: (currentKit?.subs.map((sub) => sub.serial) ?? form.subDeviceIds) as [string, string, string],
+    };
     const outcome = await submitInstallation({ ...form, truckLabel: truckDisplayLabel } as InstallKitFormValues & { truckLabel: string });
     setResult(outcome);
     if (outcome.status === 'queued') {
+      setShareDetails(completedInstallation);
+      window.localStorage.setItem(installationShareStorageKey, JSON.stringify(completedInstallation));
       setForm(emptyForm);
       setCurrentKit(null);
       setTruckQuery('');
@@ -360,7 +402,35 @@ export default function InstallPage() {
         weakestTier={null}
       />
 
-      {result.status === 'queued' && <p className="banner banner--ok">Saved on device. Installation is pending sync.</p>}
+      {shareDetails && (
+        <section
+          ref={sharePanelRef}
+          id="installation-handover"
+          className="install-share"
+          aria-live="polite"
+          tabIndex={-1}
+        >
+          <div>
+            <strong>Installation saved</strong>
+            <span>The handover report is ready to send.</span>
+          </div>
+          <div className="install-share__actions">
+            <a
+              className="btn btn--primary install-share__action"
+              href={buildInstallationWhatsAppUrl(shareDetails)}
+              target="_blank"
+              rel="noreferrer"
+              onClick={dismissInstallationShare}
+            >
+              <MessageCircle aria-hidden="true" />
+              Send via WhatsApp
+            </a>
+            <button className="btn btn--secondary" type="button" onClick={dismissInstallationShare}>
+              Dismiss
+            </button>
+          </div>
+        </section>
+      )}
       {result.status === 'error' && <p className="banner banner--error">{`Error: ${result.message}`}</p>}
 
       <form className="install-form cockpit-grid" onSubmit={handleSubmit}>
@@ -614,6 +684,11 @@ export default function InstallPage() {
       </form>
     </main>
   );
+
+  function dismissInstallationShare() {
+    setShareDetails(null);
+    window.localStorage.removeItem(installationShareStorageKey);
+  }
 }
 
 function humanTruckValue(value: string | null | undefined): string {
@@ -659,6 +734,19 @@ function displaySubLockLabel(currentKit: CurrentTruckKit | null, subDeviceIds: I
 
 function isInternalDeviceId(value: string): boolean {
   return value.startsWith('dev_');
+}
+
+function isInstallationShareDetails(value: unknown): value is InstallationShareDetails {
+  if (!value || typeof value !== 'object') return false;
+  const candidate = value as Partial<InstallationShareDetails>;
+  return (
+    typeof candidate.truck === 'string' &&
+    (candidate.company === 'mrs' || candidate.company === 'dangote') &&
+    typeof candidate.mother === 'string' &&
+    Array.isArray(candidate.subs) &&
+    candidate.subs.length === 3 &&
+    candidate.subs.every((sub) => typeof sub === 'string')
+  );
 }
 
 function formatClientTimestamp(value: number): string {

@@ -193,7 +193,7 @@ describe('movement.service — every action writes an audit_log row inside its t
       company: 'mrs',
     });
 
-    const { movementLogId } = db.transaction((tx: typeof db) =>
+    const { movementLogId } = db.transaction((tx) =>
       resolveTruckSwap(tx, { deviceId: kit.motherDeviceId, toTruckId: truckB, actorUserId: installerId }),
     );
 

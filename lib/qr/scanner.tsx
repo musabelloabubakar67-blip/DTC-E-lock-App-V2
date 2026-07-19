@@ -91,6 +91,7 @@ export function CameraScanner({
   const [decoderAvailable, setDecoderAvailable] = useState(true);
   const [manualValue, setManualValue] = useState('');
   const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchChecked, setTorchChecked] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
   const [torchPending, setTorchPending] = useState(false);
 
@@ -107,9 +108,11 @@ export function CameraScanner({
       setError(null);
       setDecoderAvailable(true);
       setTorchAvailable(false);
+      setTorchChecked(false);
       setTorchOn(false);
 
       if (!navigator.mediaDevices?.getUserMedia) {
+        setTorchChecked(true);
         setError('Camera access is not available in this browser. Use manual entry.');
         return;
       }
@@ -156,6 +159,7 @@ export function CameraScanner({
 
         const accessMessage = cameraAccessErrorMessage(zxingError);
         if (!accessMessage.includes('Camera could not start')) {
+          setTorchChecked(true);
           setError(accessMessage);
           return;
         }
@@ -163,6 +167,7 @@ export function CameraScanner({
 
       const Detector = (window as Window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector;
       if (!Detector) {
+        setTorchChecked(true);
         setDecoderAvailable(false);
         setError('Scanner decoder could not load in this browser session. Use manual entry.');
         return;
@@ -177,6 +182,7 @@ export function CameraScanner({
 
         streamRef.current = stream;
         setTorchAvailable(streamHasTorch(stream));
+        setTorchChecked(true);
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
@@ -212,6 +218,7 @@ export function CameraScanner({
 
         frameRef.current = window.requestAnimationFrame(scanFrame);
       } catch (error) {
+        setTorchChecked(true);
         setError(cameraAccessErrorMessage(error));
       }
     }
@@ -227,6 +234,7 @@ export function CameraScanner({
       scannerControlsRef.current?.stop();
       scannerControlsRef.current = null;
       setTorchAvailable(false);
+      setTorchChecked(false);
       setTorchOn(false);
       setTorchPending(false);
       streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -242,6 +250,7 @@ export function CameraScanner({
   function syncTorchAvailability(controls: ScannerControls) {
     const stream = videoRef.current?.srcObject instanceof MediaStream ? videoRef.current.srcObject : null;
     setTorchAvailable(Boolean(controls.switchTorch) || streamHasTorch(stream));
+    setTorchChecked(true);
   }
 
   async function toggleTorch() {
@@ -274,6 +283,9 @@ export function CameraScanner({
         <header>
           <strong>Scan {label}</strong>
           <div className="scanner-modal__actions">
+            <span className="scanner-modal__torch-status" data-available={torchAvailable} aria-live="polite">
+              {torchAvailable ? 'Torch available' : torchChecked ? 'Torch unavailable' : 'Checking torch'}
+            </span>
             {torchAvailable && (
               <button
                 type="button"
@@ -282,7 +294,7 @@ export function CameraScanner({
                 disabled={torchPending}
                 onClick={toggleTorch}
               >
-                {torchOn ? 'Torch on' : 'Torch'}
+                {torchOn ? 'Turn torch off' : 'Turn torch on'}
               </button>
             )}
             <button type="button" className="btn btn--secondary btn--compact" onClick={onCancel}>

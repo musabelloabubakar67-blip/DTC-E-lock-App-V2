@@ -12,13 +12,14 @@ import SettingsClient from './settings-client';
 export default async function SettingsPage() {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user) {
+  if (!session?.user?.id) {
     redirect('/login');
   }
 
-  const rawMode = cookies().get('dtc-theme')?.value ?? 'system';
+  const cookieStore = await cookies();
+  const rawMode = cookieStore.get('dtc-theme')?.value ?? 'system';
   const mode: AppearanceMode = rawMode === 'light' || rawMode === 'dark' ? rawMode : 'system';
-  const compactMode = cookies().get('dtc-compact-mode')?.value === 'true';
+  const compactMode = cookieStore.get('dtc-compact-mode')?.value === 'true';
 
   const settings = getSettingsData(
     db,

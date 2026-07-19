@@ -1,5 +1,8 @@
 # DTC E-Lock Management System
 
+Railway production setup, volume requirements, CI gates, and restore checks are documented in
+[docs/RAILWAY_DEPLOYMENT.md](./docs/RAILWAY_DEPLOYMENT.md).
+
 See [ARCHITECTURE.md](./ARCHITECTURE.md) — ground truth for this project. Do not implement
 against this README if it ever disagrees with ARCHITECTURE.md; flag the conflict instead.
 

@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="DTC E-Lock">
+  <rect width="512" height="512" fill="#efefea"/>
+  <rect x="28" y="28" width="456" height="456" fill="#fafaf7" stroke="#17191a" stroke-width="8"/>
+  <image href="/dtc-logo.jpeg" x="48" y="88" width="416" height="219" preserveAspectRatio="xMidYMid meet"/>
+  <rect x="52" y="333" width="118" height="14" fill="#e32020"/>
+  <text x="52" y="408" fill="#17191a" font-family="Arial Black, Arial, Helvetica, sans-serif" font-size="60" font-weight="900" letter-spacing="0">E-LOCK</text>
+  <text x="54" y="449" fill="#5f6464" font-family="Consolas, Courier New, monospace" font-size="20" font-weight="700" letter-spacing="0">CONTROL SYSTEM / 01</text>
+</svg>

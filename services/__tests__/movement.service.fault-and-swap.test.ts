@@ -104,7 +104,7 @@ describe('movement.service — truck_swap atomicity (reused injected-failure pat
       })
       .run();
 
-    function makeFailAfterFirstSideProxy(realTx: typeof db) {
+    function makeFailAfterFirstSideProxy<T extends object>(realTx: T): T {
       let truckAssignmentInsertSeen = false;
       return new Proxy(realTx, {
         get(target, prop, receiver) {
@@ -120,11 +120,11 @@ describe('movement.service — truck_swap atomicity (reused injected-failure pat
           const orig = Reflect.get(target, prop, receiver);
           return typeof orig === 'function' ? orig.bind(target) : orig;
         },
-      }) as typeof db;
+      }) as T;
     }
 
     expect(() => {
-      db.transaction((tx: typeof db) => {
+      db.transaction((tx) => {
         const failingTx = makeFailAfterFirstSideProxy(tx);
         resolveTruckSwap(failingTx, { deviceId, toTruckId: truckB, actorUserId: installerId });
       });

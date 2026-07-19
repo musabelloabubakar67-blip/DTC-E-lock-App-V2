@@ -112,8 +112,11 @@ export async function createSettingsUser(
   if (!displayName) {
     throw new Error('Display name is required.');
   }
-  if (password.length < 8) {
-    throw new Error('Password must be at least 8 characters.');
+  if (password.length < 12) {
+    throw new Error('Password must be at least 12 characters.');
+  }
+  if (password.toLowerCase().includes(username)) {
+    throw new Error('Password cannot contain the username.');
   }
 
   const existing = db
@@ -190,8 +193,8 @@ export async function changeSettingsPassword(
     throw new Error('Current password is incorrect.');
   }
 
-  if (input.newPassword.length < 8) {
-    throw new Error('New password must be at least 8 characters.');
+  if (input.newPassword.length < 12) {
+    throw new Error('New password must be at least 12 characters.');
   }
 
   if (input.newPassword !== input.confirmPassword) {
