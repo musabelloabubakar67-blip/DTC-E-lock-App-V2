@@ -1,6 +1,14 @@
-const CACHE_VERSION = 'v3';
+const CACHE_VERSION = 'v4';
 const STATIC_CACHE = `dtc-elock-static-${CACHE_VERSION}`;
-const PRECACHE = ['/offline.html', '/manifest.json', '/dtc-app-icon-light.svg', '/dtc-logo.jpeg'];
+const PRECACHE = [
+  '/offline.html',
+  '/manifest.json',
+  '/dtc-logo.jpeg',
+  '/icons/dtc-elock-192.png',
+  '/icons/dtc-elock-512.png',
+  '/icons/dtc-elock-192-maskable.png',
+  '/icons/dtc-elock-512-maskable.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

@@ -1,0 +1,43 @@
+{
+  "packageId": "com.directtrucking.elock",
+  "host": "web-production-2265c.up.railway.app",
+  "name": "DTC E-Lock",
+  "launcherName": "DTC E-Lock",
+  "display": "standalone",
+  "themeColor": "#efefea",
+  "themeColorDark": "#17191a",
+  "navigationColor": "#17191a",
+  "navigationColorDark": "#17191a",
+  "navigationDividerColor": "#e32020",
+  "navigationDividerColorDark": "#e32020",
+  "backgroundColor": "#efefea",
+  "enableNotifications": false,
+  "startUrl": "/",
+  "iconUrl": "https://web-production-2265c.up.railway.app/icons/dtc-elock-512.png",
+  "maskableIconUrl": "https://web-production-2265c.up.railway.app/icons/dtc-elock-512-maskable.png",
+  "splashScreenFadeOutDuration": 220,
+  "signingKey": {
+    "path": "./signing-key.jks",
+    "alias": "dtc-elock"
+  },
+  "appVersion": "1.0.0",
+  "appVersionCode": 1,
+  "shortcuts": [],
+  "generatorApp": "bubblewrap-cli",
+  "webManifestUrl": "https://web-production-2265c.up.railway.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "enableSiteSettingsShortcut": true,
+  "isChromeOSOnly": false,
+  "isMetaQuest": false,
+  "fullScopeUrl": "https://web-production-2265c.up.railway.app/",
+  "minSdkVersion": 21,
+  "orientation": "any",
+  "fingerprints": [],
+  "additionalTrustedOrigins": [],
+  "retainedBundles": [],
+  "displayOverride": []
+}

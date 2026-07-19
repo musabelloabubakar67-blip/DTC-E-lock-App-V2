@@ -10,7 +10,11 @@ export const metadata: Metadata = {
   description: 'DTC fleet e-lock operations console',
   manifest: '/manifest.json',
   icons: {
-    icon: '/dtc-app-icon-light.svg',
+    icon: [
+      { url: '/icons/dtc-elock-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/dtc-elock-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [{ url: '/icons/dtc-elock-192.png', sizes: '192x192', type: 'image/png' }],
   },
   appleWebApp: {
     capable: true,

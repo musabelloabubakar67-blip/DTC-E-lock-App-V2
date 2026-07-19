@@ -6,22 +6,54 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#efefea",
   "theme_color": "#efefea",
   "lang": "en",
   "categories": ["business", "productivity", "utilities"],
+  "shortcuts": [
+    {
+      "name": "Install kit",
+      "short_name": "Install",
+      "url": "/install",
+      "icons": [{ "src": "/icons/dtc-elock-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Lookup asset",
+      "short_name": "Lookup",
+      "url": "/lookup",
+      "icons": [{ "src": "/icons/dtc-elock-192.png", "sizes": "192x192", "type": "image/png" }]
+    },
+    {
+      "name": "Verify kit",
+      "short_name": "Verify",
+      "url": "/verify",
+      "icons": [{ "src": "/icons/dtc-elock-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
   "icons": [
     {
-      "src": "/dtc-app-icon-light.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/icons/dtc-elock-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/dtc-app-icon-light.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/icons/dtc-elock-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/dtc-elock-192-maskable.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "maskable"
+    },
+    {
+      "src": "/icons/dtc-elock-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
       "purpose": "maskable"
     }
   ]

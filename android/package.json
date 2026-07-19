@@ -1,0 +1,14 @@
+{
+  "name": "dtc-elock-android",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "twa:update": "bubblewrap update --manifest=./twa-manifest.json",
+    "twa:build": "bubblewrap build",
+    "twa:doctor": "bubblewrap doctor",
+    "twa:install": "bubblewrap install"
+  },
+  "devDependencies": {
+    "@bubblewrap/cli": "1.24.1"
+  }
+}

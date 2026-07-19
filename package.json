@@ -11,6 +11,7 @@
     "build": "next build",
     "start": "next start",
     "start:railway": "node scripts/start-railway.mjs",
+    "icons:generate": "node scripts/generate-app-icons.mjs",
     "typecheck": "tsc --noEmit",
     "db:migrate": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs db/migrate.ts",
     "db:seed": "node --env-file-if-exists=.env node_modules/tsx/dist/cli.mjs scripts/seed.ts",
@@ -39,6 +40,7 @@
     "@types/react": "^18.3.4",
     "@types/react-dom": "^18.3.0",
     "fake-indexeddb": "^6.0.0",
+    "sharp": "^0.35.3",
     "tsx": "^4.19.0",
     "typescript": "^5.5.4",
     "vitest": "4.1.10"
