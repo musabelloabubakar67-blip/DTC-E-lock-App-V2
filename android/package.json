@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "twa:update": "bubblewrap update --manifest=./twa-manifest.json",
+    "twa:update": "bubblewrap update --skipVersionUpgrade --manifest=./twa-manifest.json",
     "twa:build": "bubblewrap build",
     "twa:doctor": "bubblewrap doctor",
     "twa:install": "bubblewrap install"

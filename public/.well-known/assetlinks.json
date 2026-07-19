@@ -1,0 +1,12 @@
+[
+  {
+    "relation": ["delegate_permission/common.handle_all_urls"],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "com.directtrucking.elock",
+      "sha256_cert_fingerprints": [
+        "59:20:42:5F:7A:B7:2F:93:2D:A2:95:8E:05:84:25:AB:1C:33:15:16:81:33:D0:21:78:E7:E2:17:EB:7A:8B:E5"
+      ]
+    }
+  }
+]
