@@ -12,10 +12,10 @@ declare global {
   var __sqlite: Database.Database | undefined;
 }
 
-const sqlite = global.__sqlite ?? new Database(DB_PATH);
+const sqlite = global.__sqlite ?? new Database(DB_PATH, { timeout: 5000 });
+sqlite.pragma('busy_timeout = 5000');
 sqlite.pragma('journal_mode = WAL');
 sqlite.pragma('foreign_keys = ON');
-sqlite.pragma('busy_timeout = 5000');
 sqlite.pragma('synchronous = NORMAL');
 
 if (process.env.NODE_ENV !== 'production') {
