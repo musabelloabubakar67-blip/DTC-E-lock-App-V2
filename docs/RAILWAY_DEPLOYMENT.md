@@ -33,6 +33,12 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 Do not set `SEED_USER_PASSWORD` or run `db:seed` against production. The imported production
 database should be copied into the mounted volume through an explicit migration/import job.
 
+For an initial SQLite import, upload a database backup to `/bootstrap.sqlite` on the volume and
+set `DATABASE_BOOTSTRAP_PATH=/app/data/bootstrap.sqlite`. On the next start, the app validates
+the snapshot, preserves the existing database as a timestamped fallback, atomically promotes the
+snapshot, and then runs migrations. The bootstrap file is consumed by the promotion, so ordinary
+restarts do not repeat the import.
+
 ## 3. Gate deployments
 
 In Railway's GitHub deployment settings, enable **Wait for CI**. The repository CI checks:

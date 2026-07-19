@@ -1,8 +1,11 @@
 import { spawn } from 'node:child_process';
+import { existsSync, renameSync, rmSync } from 'node:fs';
+import Database from 'better-sqlite3';
 
 const port = process.env.PORT ?? '3000';
 
 validateProductionEnvironment();
+promoteBootstrapDatabase();
 
 await run(process.execPath, [
   '--env-file-if-exists=.env',
@@ -58,4 +61,38 @@ function validateProductionEnvironment() {
   if (errors.length > 0) {
     throw new Error(`Production configuration is incomplete:\n- ${errors.join('\n- ')}`);
   }
+}
+
+function promoteBootstrapDatabase() {
+  const bootstrapPath = process.env.DATABASE_BOOTSTRAP_PATH;
+  const databasePath = process.env.DATABASE_PATH;
+  if (!bootstrapPath || !databasePath || !existsSync(bootstrapPath)) return;
+
+  const bootstrap = new Database(bootstrapPath, { readonly: true, fileMustExist: true });
+  try {
+    const integrity = bootstrap.pragma('integrity_check', { simple: true });
+    if (integrity !== 'ok') {
+      throw new Error(`Bootstrap database failed integrity_check: ${integrity}`);
+    }
+
+    const migrationTable = bootstrap
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = '_migrations'")
+      .get();
+    if (!migrationTable) {
+      throw new Error('Bootstrap database is missing the migration ledger.');
+    }
+  } finally {
+    bootstrap.close();
+  }
+
+  if (existsSync(databasePath)) {
+    const backupPath = `${databasePath}.pre-bootstrap-${new Date().toISOString().replaceAll(':', '-')}`;
+    renameSync(databasePath, backupPath);
+    console.log(`Preserved previous database at ${backupPath}`);
+  }
+
+  rmSync(`${databasePath}-wal`, { force: true });
+  rmSync(`${databasePath}-shm`, { force: true });
+  renameSync(bootstrapPath, databasePath);
+  console.log(`Promoted bootstrap database to ${databasePath}`);
 }
