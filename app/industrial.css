@@ -1739,7 +1739,12 @@
     max-height: none;
     overflow: visible;
     border: 0;
+    opacity: 1;
+    visibility: visible;
     pointer-events: auto;
+    transform: none;
+    transition: none;
+    will-change: auto;
   }
 
   .app-shell .nav__more {
@@ -1963,7 +1968,12 @@
   max-height: none;
   overflow: visible;
   border: 0;
+  opacity: 1;
+  visibility: visible;
   pointer-events: auto;
+  transform: none;
+  transition: none;
+  will-change: auto;
 }
 .app-shell[data-viewport^="tablet"] .nav__more { display: none; }
 .app-shell[data-viewport^="tablet"] .nav__link[data-context-only="true"] { display: none; }
