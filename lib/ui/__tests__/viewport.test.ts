@@ -7,6 +7,7 @@ describe('classifyAppViewport', () => {
   });
 
   it('uses the tablet rail at normal tablet widths', () => {
+    expect(classifyAppViewport(600, 800)).toBe('tablet-portrait');
     expect(classifyAppViewport(800, 800)).toBe('tablet-portrait');
     expect(classifyAppViewport(1024, 800)).toBe('tablet-landscape');
   });

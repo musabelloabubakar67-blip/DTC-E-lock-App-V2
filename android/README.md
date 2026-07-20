@@ -11,6 +11,8 @@ This project packages the production PWA as a Trusted Web Activity (TWA).
 
 The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`.
 
+`LauncherActivity` pins `com.android.chrome` as the TWA provider because the Samsung Internet version on the fleet tablet only opens the app as a Custom Tab. Keep Chrome updated on managed tablets.
+
 ## Domain verification
 
 The website must serve `/.well-known/assetlinks.json` with this package name and the SHA-256 fingerprint of every trusted signing certificate. The committed fingerprint is for local device testing only. Before Play Store release, add the Play App Signing certificate fingerprint and build with the permanent release key.

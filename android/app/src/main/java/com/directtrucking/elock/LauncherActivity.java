@@ -20,10 +20,17 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 
+import com.google.androidbrowserhelper.trusted.TwaLauncher;
 
 
 public class LauncherActivity
         extends com.google.androidbrowserhelper.trusted.LauncherActivity {
+
+    @Override
+    protected TwaLauncher createTwaLauncher() {
+        // Samsung Internet claims Custom Tabs on this fleet tablet but does not launch a TWA.
+        return new TwaLauncher(this, "com.android.chrome");
+    }
     
 
     
