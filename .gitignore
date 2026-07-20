@@ -15,4 +15,5 @@ data/
 .agents/
 .hallmark/
 .android-tools/
+.gradle-home/
 skills-lock.json
