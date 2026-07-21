@@ -11,6 +11,7 @@ import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,16 +19,18 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.FlashOff
 import androidx.compose.material.icons.outlined.FlashOn
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -42,6 +45,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.google.mlkit.vision.barcode.BarcodeScannerOptions
 import com.google.mlkit.vision.barcode.BarcodeScanning
@@ -58,34 +63,29 @@ fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> U
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { permissionGranted = it }
     LaunchedEffect(Unit) { if (!permissionGranted) permission.launch(Manifest.permission.CAMERA) }
 
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {},
-        title = {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Scan $label", style = MaterialTheme.typography.titleLarge)
-                    Text("Keep one code inside the frame", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close scanner") }
-            }
-        },
-        text = {
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
+        Surface(
+            Modifier.widthIn(max = 210.dp).fillMaxWidth().padding(8.dp),
+            color = MaterialTheme.colorScheme.surface,
+            border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
+        ) {
+            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (permissionGranted) {
-                CameraScanner(onScanned = onScanned)
+                CameraScanner(label = label, onScanned = onScanned, onDismiss = onDismiss)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Camera permission is needed to scan lock labels.")
                     Button(onClick = { permission.launch(Manifest.permission.CAMERA) }) { Text("Allow camera") }
                 }
             }
-        },
-    )
+            }
+        }
+    }
 }
 
 @OptIn(ExperimentalGetImage::class)
 @Composable
-private fun CameraScanner(onScanned: (String) -> Unit) {
+private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
@@ -97,26 +97,38 @@ private fun CameraScanner(onScanned: (String) -> Unit) {
     var torch by remember { mutableStateOf(false) }
     var cameraControl by remember { mutableStateOf<androidx.camera.core.CameraControl?>(null) }
     var consumed by remember { mutableStateOf(false) }
-    val previewView = remember { PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER } }
-
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Box(
-            Modifier.fillMaxWidth().heightIn(max = 330.dp).aspectRatio(4f / 3f).background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().aspectRatio(4f / 3f))
-            Text(
-                "ALIGN CODE WITHIN FRAME",
-                modifier = Modifier.align(Alignment.TopCenter).padding(top = 12.dp).background(Ink.copy(alpha = .8f)).padding(horizontal = 10.dp, vertical = 5.dp),
-                color = androidx.compose.ui.graphics.Color.White,
-                style = MaterialTheme.typography.labelMedium,
-            )
+    val previewView = remember {
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Text(if (torch) "Torch on" else "Torch off", style = MaterialTheme.typography.labelMedium)
+    }
+
+    Box(Modifier.fillMaxWidth().height(120.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(120.dp))
+        Row(
+            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Ink.copy(alpha = .88f)).padding(start = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("[ SCAN ${label.uppercase()} ]", Modifier.weight(1f), color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelMedium)
+            IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close scanner", tint = androidx.compose.ui.graphics.Color.White) }
+        }
+        Text(
+            "ALIGN CODE WITHIN FRAME",
+            modifier = Modifier.align(Alignment.Center).background(Ink.copy(alpha = .82f)).padding(horizontal = 8.dp, vertical = 5.dp),
+            color = androidx.compose.ui.graphics.Color.White,
+            style = MaterialTheme.typography.labelMedium,
+        )
+        Row(
+            Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Ink.copy(alpha = .88f)).padding(start = 8.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(if (torch) "TORCH / ON" else "TORCH / OFF", style = MaterialTheme.typography.labelMedium, color = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White)
             IconButton(onClick = {
                 torch = !torch
                 cameraControl?.enableTorch(torch)
-            }) { Icon(if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff, "Toggle torch") }
+            }) { Icon(if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff, "Toggle torch", tint = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White) }
         }
     }
 
