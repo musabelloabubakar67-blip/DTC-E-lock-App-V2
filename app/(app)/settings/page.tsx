@@ -6,7 +6,14 @@ import { db, sqlite } from '../../../db';
 import { requireSupervisor } from '../../../services/auth.service';
 import { listExportSummaries } from '../../../services/data-management.service';
 import { getSettingsData, type AppearanceMode } from '../../../services/settings.service';
-import { changePasswordAction, createUserAction, setAppearanceAction, setUserActiveAction, type SettingsActionState } from './actions';
+import {
+  changePasswordAction,
+  createUserAction,
+  resetUserPasswordAction,
+  setAppearanceAction,
+  setUserActiveAction,
+  type SettingsActionState,
+} from './actions';
 import SettingsClient from './settings-client';
 
 export default async function SettingsPage() {
@@ -44,6 +51,7 @@ export default async function SettingsPage() {
       exportSummaries={exports}
       changePasswordAction={changePasswordAction}
       createUserAction={createUserAction}
+      resetUserPasswordAction={resetUserPasswordAction}
       setUserActiveAction={setUserActiveAction}
       setAppearanceAction={setAppearanceAction}
     />

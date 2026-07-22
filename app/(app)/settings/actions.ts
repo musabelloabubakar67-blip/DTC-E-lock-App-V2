@@ -9,6 +9,7 @@ import { requireAuthenticated } from '../../../services/auth.service';
 import {
   changeSettingsPassword,
   createSettingsUser,
+  resetSettingsUserPassword,
   setSettingsUserActive,
   type AppearanceMode,
   type CreateSettingsUserInput,
@@ -77,6 +78,24 @@ export async function setUserActiveAction(formData: FormData): Promise<void> {
     isActive: String(formData.get('isActive') ?? '') === 'true',
   });
   revalidatePath('/settings');
+}
+
+export async function resetUserPasswordAction(
+  _state: SettingsActionState,
+  formData: FormData,
+): Promise<SettingsActionState> {
+  try {
+    const actor = await getActor();
+    await resetSettingsUserPassword(db, actor, {
+      userId: String(formData.get('userId') ?? ''),
+      newPassword: String(formData.get('newPassword') ?? ''),
+      confirmPassword: String(formData.get('confirmPassword') ?? ''),
+    });
+    revalidatePath('/settings');
+    return { status: 'success', message: 'Password reset. Existing sessions have been revoked.' };
+  } catch (error) {
+    return { status: 'error', message: error instanceof Error ? error.message : 'Could not reset password.' };
+  }
 }
 
 export async function setAppearanceAction(formData: FormData): Promise<void> {

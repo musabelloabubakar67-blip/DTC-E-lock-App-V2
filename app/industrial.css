@@ -894,6 +894,13 @@
 .app-shell .settings-user-cell > span { font-size: var(--industrial-type-meta); }
 .app-shell .settings-form { gap: 10px; }
 .app-shell .settings-form--inline { padding: 12px; border-bottom: 1px solid var(--industrial-rule); background: var(--industrial-paper-2); }
+.app-shell .settings-user-actions { display: flex; align-items: center; gap: 6px; }
+.app-shell .settings-user-actions form { margin: 0; }
+.app-shell .settings-user-actions svg { width: 14px; height: 14px; }
+.app-shell .settings-password-reset { padding: 14px; border-top: 1px solid var(--industrial-rule); background: var(--industrial-paper-2); }
+.app-shell .settings-password-reset__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.app-shell .settings-password-reset__header > span { display: flex; align-items: center; gap: 8px; }
+.app-shell .settings-password-reset__header svg { width: 17px; height: 17px; color: var(--industrial-red); }
 .app-shell .settings-segmented { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0; padding: 0; border: 1px solid var(--industrial-rule); }
 .app-shell .settings-segmented legend { padding: 0 5px; }
 .app-shell .settings-segmented label { min-width: 0; }

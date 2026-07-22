@@ -52,6 +52,12 @@ export type ChangePasswordInput = {
   confirmPassword: string;
 };
 
+export type ResetUserPasswordInput = {
+  userId: string;
+  newPassword: string;
+  confirmPassword: string;
+};
+
 export function getSettingsData(
   db: BetterSQLite3Database<typeof schema>,
   actor: AuthenticatedUser,
@@ -209,5 +215,49 @@ export async function changeSettingsPassword(
   db.update(users)
     .set({ passwordHash, updatedAt: Math.floor(Date.now() / 1000) })
     .where(eq(users.id, user.id))
+    .run();
+}
+
+export async function resetSettingsUserPassword(
+  db: BetterSQLite3Database<typeof schema>,
+  actor: AuthenticatedUser,
+  input: ResetUserPasswordInput,
+): Promise<void> {
+  const supervisor = requireSupervisor(actor);
+  const target = db
+    .select({
+      id: users.id,
+      username: users.username,
+      passwordHash: users.passwordHash,
+      isActive: users.isActive,
+      updatedAt: users.updatedAt,
+    })
+    .from(users)
+    .where(and(eq(users.orgId, supervisor.orgId), eq(users.id, input.userId)))
+    .get();
+
+  if (!target) {
+    throw new Error('User could not be found.');
+  }
+  if (!target.isActive) {
+    throw new Error('Activate this user before resetting their password.');
+  }
+  if (input.newPassword.length < 12) {
+    throw new Error('New password must be at least 12 characters.');
+  }
+  if (input.newPassword !== input.confirmPassword) {
+    throw new Error('New passwords do not match.');
+  }
+  if (input.newPassword.toLowerCase().includes(target.username)) {
+    throw new Error('Password cannot contain the username.');
+  }
+  if (await bcrypt.compare(input.newPassword, target.passwordHash)) {
+    throw new Error('New password must be different.');
+  }
+
+  const passwordHash = await bcrypt.hash(input.newPassword, 10);
+  db.update(users)
+    .set({ passwordHash, updatedAt: Math.max(Math.floor(Date.now() / 1000), target.updatedAt + 1) })
+    .where(and(eq(users.orgId, supervisor.orgId), eq(users.id, target.id)))
     .run();
 }

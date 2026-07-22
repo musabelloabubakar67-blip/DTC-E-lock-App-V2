@@ -3,7 +3,7 @@
 import { useFormState } from 'react-dom';
 import { signOut } from 'next-auth/react';
 import { useState, type ReactNode } from 'react';
-import { Database, FileJson, FileSpreadsheet, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
+import { Database, Eye, EyeOff, FileJson, FileSpreadsheet, KeyRound, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
 import { Badge, DataTable, IndustrialPageHeader, Panel } from '../_components/ProductUI';
 import type { ExportSummary } from '../../../services/data-management.service';
 import type { SettingsData } from '../../../services/settings.service';
@@ -17,6 +17,7 @@ type Props = {
   exportSummaries: ExportSummary[];
   changePasswordAction: (state: SettingsActionState, formData: FormData) => Promise<SettingsActionState>;
   createUserAction: (state: SettingsActionState, formData: FormData) => Promise<SettingsActionState>;
+  resetUserPasswordAction: (state: SettingsActionState, formData: FormData) => Promise<SettingsActionState>;
   setUserActiveAction: (formData: FormData) => Promise<void>;
   setAppearanceAction: (formData: FormData) => Promise<void>;
 };
@@ -29,12 +30,16 @@ export default function SettingsClient({
   exportSummaries,
   changePasswordAction,
   createUserAction,
+  resetUserPasswordAction,
   setUserActiveAction,
   setAppearanceAction,
 }: Props) {
   const [createState, createFormAction] = useFormState(createUserAction, initialActionState);
   const [passwordState, passwordFormAction] = useFormState(changePasswordAction, initialActionState);
+  const [resetState, resetFormAction] = useFormState(resetUserPasswordAction, initialActionState);
   const [addUserOpen, setAddUserOpen] = useState(false);
+  const [resetUserId, setResetUserId] = useState<string | null>(null);
+  const [resetPasswordVisible, setResetPasswordVisible] = useState(false);
   const activeUsers = settings.users.filter((user) => user.isActive).length;
   const canManageUsers = currentRole === 'supervisor';
   const currentUser = settings.users.find((user) => user.id === currentUserId) ?? null;
@@ -131,19 +136,81 @@ export default function SettingsClient({
                   </span>,
                   user.lastLogin ? formatDate(user.lastLogin) : 'Never',
                   canManageUsers ? (
-                    <form key={user.id} action={setUserActiveAction}>
-                      <input type="hidden" name="userId" value={user.id} />
-                      <input type="hidden" name="isActive" value={user.isActive ? 'false' : 'true'} />
-                      <button className="btn btn--secondary btn--compact" type="submit" disabled={user.id === currentUserId}>
-                        {user.isActive ? 'Deactivate' : 'Activate'}
+                    <div className="settings-user-actions" key={user.id}>
+                      <button
+                        className="btn btn--secondary btn--compact"
+                        type="button"
+                        disabled={!user.isActive}
+                        onClick={() => setResetUserId((selected) => selected === user.id ? null : user.id)}
+                      >
+                        <KeyRound aria-hidden="true" />
+                        Reset
                       </button>
-                    </form>
+                      <form action={setUserActiveAction}>
+                        <input type="hidden" name="userId" value={user.id} />
+                        <input type="hidden" name="isActive" value={user.isActive ? 'false' : 'true'} />
+                        <button className="btn btn--secondary btn--compact" type="submit" disabled={user.id === currentUserId}>
+                          {user.isActive ? 'Deactivate' : 'Activate'}
+                        </button>
+                      </form>
+                    </div>
                   ) : (
                     '-'
                   ),
                 ])}
                 emptyLabel="No users found."
               />
+              {resetUserId && (
+                <form className="settings-form settings-password-reset" action={resetFormAction}>
+                  <div className="settings-password-reset__header">
+                    <span>
+                      <KeyRound aria-hidden="true" />
+                      Reset password for <strong>{settings.users.find((user) => user.id === resetUserId)?.displayName}</strong>
+                    </span>
+                    <button
+                      className="settings-icon-button"
+                      type="button"
+                      aria-label="Close password reset form"
+                      onClick={() => setResetUserId(null)}
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </div>
+                  <input type="hidden" name="userId" value={resetUserId} />
+                  <label>
+                    <span>New password</span>
+                    <span className="login-password-field">
+                      <input
+                        name="newPassword"
+                        type={resetPasswordVisible ? 'text' : 'password'}
+                        autoComplete="new-password"
+                        minLength={12}
+                        required
+                      />
+                      <button
+                        className="login-password-toggle"
+                        type="button"
+                        aria-label={resetPasswordVisible ? 'Hide password' : 'Show password'}
+                        onClick={() => setResetPasswordVisible((visible) => !visible)}
+                      >
+                        {resetPasswordVisible ? <EyeOff aria-hidden="true" /> : <Eye aria-hidden="true" />}
+                      </button>
+                    </span>
+                  </label>
+                  <label>
+                    <span>Confirm new password</span>
+                    <input name="confirmPassword" type="password" autoComplete="new-password" minLength={12} required />
+                  </label>
+                  {resetState.status !== 'idle' && (
+                    <p className={`banner ${resetState.status === 'error' ? 'banner--error' : 'banner--success'}`}>
+                      {resetState.message}
+                    </p>
+                  )}
+                  <button className="btn btn--primary" type="submit">
+                    Reset password
+                  </button>
+                </form>
+              )}
             </Panel>
           </div>
         )}
