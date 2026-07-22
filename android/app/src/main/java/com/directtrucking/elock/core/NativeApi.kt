@@ -23,6 +23,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyStore
 import java.io.File
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
@@ -108,6 +109,15 @@ data class LookupSnapshot(
     val reviewItems: List<ReviewItem> = emptyList(),
     val pendingSyncCount: Int = 0,
 )
+data class NativeSyncResult(val pending: Int, val applied: Int, val reachedServer: Boolean)
+
+private data class PendingNativeMutation(
+    val id: String,
+    val endpoint: String,
+    val payload: JSONObject,
+    val clientTs: Long,
+    val seq: Long,
+)
 
 class ApiException(message: String, val statusCode: Int = 0) : Exception(message)
 
@@ -122,6 +132,7 @@ class DtcApi(private val context: Context) {
     private val jsonType = "application/json; charset=utf-8".toMediaType()
     private val baseUrl = BuildConfig.API_BASE_URL.trimEnd('/')
     private val appearance = context.getSharedPreferences("dtc_native_appearance", Context.MODE_PRIVATE)
+    private val mutationStore = context.getSharedPreferences("dtc_native_mutations", Context.MODE_PRIVATE)
 
     fun appearanceMode(): String = appearance.getString("theme", "Dark") ?: "Dark"
     fun compactMode(): Boolean = appearance.getBoolean("compact", false)
@@ -154,6 +165,7 @@ class DtcApi(private val context: Context) {
 
     suspend fun bootstrap(): DashboardSnapshot = withContext(Dispatchers.IO) { bootstrapBlocking() }
     fun logout() = cookieJar.clear()
+    fun pendingMutationCount(): Int = readMutations().size
 
     suspend fun registry(query: String = "", page: Int = 0): Pair<List<RegistryItem>, Int> = withContext(Dispatchers.IO) {
         val root = get("/api/registry?page=$page&pageSize=8&q=${query.encoded()}")
@@ -233,10 +245,10 @@ class DtcApi(private val context: Context) {
         subSerials: List<String>,
         installMode: String,
         checklist: Map<String, String>,
-    ) = withContext(Dispatchers.IO) {
+    ): NativeSyncResult = withContext(Dispatchers.IO) {
         val checklistJson = JSONObject()
         checklist.forEach { (key, value) -> if (value.isNotBlank()) checklistJson.put(key, value) }
-        post(
+        enqueueAndSync(
             "/api/mobile/installations",
             JSONObject().put("truckPlate", truckPlate).put("company", company.lowercase())
                 .put("motherSerial", motherSerial).put("subSerials", JSONArray(subSerials))
@@ -297,11 +309,19 @@ class DtcApi(private val context: Context) {
         }
     }
 
-    suspend fun triage(deviceId: String, outcome: String) = withContext(Dispatchers.IO) {
-        post("/api/triage", JSONObject().put("deviceId", deviceId).put("outcome", outcome))
+    suspend fun triage(deviceId: String, outcome: String): NativeSyncResult = withContext(Dispatchers.IO) {
+        enqueueAndSync("/api/triage", JSONObject().put("deviceId", deviceId).put("outcome", outcome))
     }
 
-    suspend fun reportFault(payload: JSONObject) = withContext(Dispatchers.IO) { post("/api/mobile/faults", payload) }
+    suspend fun reportFault(payload: JSONObject): NativeSyncResult = withContext(Dispatchers.IO) {
+        enqueueAndSync("/api/mobile/faults", payload)
+    }
+
+    suspend fun syncPending(): NativeSyncResult = withContext(Dispatchers.IO) { syncPendingBlocking() }
+
+    suspend fun setTruckCompany(truckId: String, company: String, notes: String) = withContext(Dispatchers.IO) {
+        post("/api/trucks/${truckId.encoded()}/company", JSONObject().put("company", company.lowercase()).put("notes", notes))
+    }
 
     suspend fun supervisors(): List<Pair<String, String>> = withContext(Dispatchers.IO) {
         val rows = get("/api/users/supervisors").getJSONArray("data")
@@ -415,6 +435,74 @@ class DtcApi(private val context: Context) {
             }
             return json
         }
+    }
+
+    @Synchronized
+    private fun enqueueAndSync(endpoint: String, payload: JSONObject): NativeSyncResult {
+        val nextSeq = mutationStore.getLong(MUTATION_SEQ, 0L) + 1L
+        val pending = readMutations().toMutableList().apply {
+            add(PendingNativeMutation(UUID.randomUUID().toString(), endpoint, JSONObject(payload.toString()), System.currentTimeMillis(), nextSeq))
+        }
+        writeMutations(pending, nextSeq)
+        return syncPendingBlocking()
+    }
+
+    @Synchronized
+    private fun syncPendingBlocking(): NativeSyncResult {
+        val pending = readMutations()
+        if (pending.isEmpty()) return NativeSyncResult(0, 0, true)
+        return try {
+            val batch = JSONArray()
+            pending.sortedWith(compareBy<PendingNativeMutation> { it.clientTs }.thenBy { it.seq }).forEach { mutation ->
+                batch.put(JSONObject().put("id", mutation.id).put("endpoint", mutation.endpoint).put("payload", mutation.payload)
+                    .put("clientTs", mutation.clientTs).put("seq", mutation.seq))
+            }
+            val response = post("/api/sync", JSONObject().put("mutations", batch))
+            val results = response.optJSONArray("results") ?: JSONArray()
+            val applied = mutableSetOf<String>()
+            for (index in 0 until results.length()) {
+                val result = results.getJSONObject(index)
+                if (result.optString("status") == "applied") applied += result.optString("id")
+            }
+            val remaining = pending.filterNot { it.id in applied }
+            writeMutations(remaining)
+            NativeSyncResult(remaining.size, applied.size, true)
+        } catch (_: Exception) {
+            NativeSyncResult(pending.size, 0, false)
+        }
+    }
+
+    @Synchronized
+    private fun readMutations(): List<PendingNativeMutation> = try {
+        val rows = JSONArray(mutationStore.getString(MUTATION_ROWS, "[]") ?: "[]")
+        buildList {
+            for (index in 0 until rows.length()) rows.getJSONObject(index).let { row ->
+                add(PendingNativeMutation(
+                    row.getString("id"), row.getString("endpoint"), row.getJSONObject("payload"),
+                    row.getLong("clientTs"), row.getLong("seq"),
+                ))
+            }
+        }
+    } catch (_: Exception) {
+        mutationStore.edit().putString(MUTATION_ROWS, "[]").apply()
+        emptyList()
+    }
+
+    @Synchronized
+    private fun writeMutations(rows: List<PendingNativeMutation>, seq: Long? = null) {
+        val json = JSONArray()
+        rows.forEach { row ->
+            json.put(JSONObject().put("id", row.id).put("endpoint", row.endpoint).put("payload", row.payload)
+                .put("clientTs", row.clientTs).put("seq", row.seq))
+        }
+        mutationStore.edit().putString(MUTATION_ROWS, json.toString()).apply {
+            if (seq != null) putLong(MUTATION_SEQ, seq)
+        }.apply()
+    }
+
+    private companion object {
+        const val MUTATION_ROWS = "rows"
+        const val MUTATION_SEQ = "sequence"
     }
 }
 

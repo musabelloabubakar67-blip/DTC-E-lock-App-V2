@@ -150,6 +150,7 @@ data class NativeUiState(
     val installationTotal: Int = 0,
     val installationPage: Int = 0,
     val repairPool: List<RepairItem> = emptyList(),
+    val supervisors: List<Pair<String, String>> = emptyList(),
     val reviews: List<ReviewItem> = emptyList(),
     val lookup: LookupSnapshot? = null,
     val settings: SettingsSnapshot? = null,
@@ -157,6 +158,7 @@ data class NativeUiState(
     val error: String? = null,
     val themeMode: ThemeMode = ThemeMode.Dark,
     val compactMode: Boolean = false,
+    val pendingSyncCount: Int = 0,
 )
 
 class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) : ViewModel() {
@@ -164,6 +166,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         if (demo) demoState() else NativeUiState(
             themeMode = runCatching { ThemeMode.valueOf(api.appearanceMode()) }.getOrDefault(ThemeMode.Dark),
             compactMode = api.compactMode(),
+            pendingSyncCount = api.pendingMutationCount(),
         ),
     )
     val state = _state.asStateFlow()
@@ -171,16 +174,29 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
     init {
         if (!demo) {
             viewModelScope.launch {
-                runCatching { api.restoreSession() }
-                    .onSuccess { dashboard -> _state.update { it.copy(booting = false, dashboard = dashboard) } }
-                    .onFailure { error -> _state.update { it.copy(booting = false, error = error.message) } }
+                try {
+                    val restored = api.restoreSession()
+                    val sync = if (restored != null) api.syncPending() else null
+                    val dashboard = if (restored != null && (sync?.applied ?: 0) > 0) api.bootstrap() else restored
+                    _state.update { it.copy(booting = false, dashboard = dashboard, pendingSyncCount = sync?.pending ?: api.pendingMutationCount()) }
+                } catch (error: Exception) {
+                    _state.update { it.copy(booting = false, error = error.message) }
+                }
+            }
+            viewModelScope.launch {
+                while (true) {
+                    delay(30_000)
+                    if (_state.value.dashboard != null) syncQueue(false)
+                }
             }
         }
     }
 
     fun login(username: String, password: String) = launchWork {
-        val dashboard = api.login(username, password)
-        _state.update { it.copy(dashboard = dashboard, selected = AppScreen.Dashboard, message = "Signed in") }
+        var dashboard = api.login(username, password)
+        val sync = api.syncPending()
+        if (sync.applied > 0) dashboard = api.bootstrap()
+        _state.update { it.copy(dashboard = dashboard, selected = AppScreen.Dashboard, pendingSyncCount = sync.pending, message = "Signed in") }
     }
 
     fun logout() {
@@ -191,6 +207,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
     fun open(screen: AppScreen) {
         _state.update { it.copy(selected = screen, message = null, error = null) }
         if (demo) return
+        syncQueue(false)
         when (screen) {
             AppScreen.Register -> loadRegistry()
             AppScreen.Install -> loadInstallations()
@@ -203,7 +220,8 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
 
     fun refreshDashboard() = launchWork {
         if (demo) return@launchWork
-        _state.update { it.copy(dashboard = api.bootstrap(), message = "Workspace refreshed") }
+        val sync = api.syncPending()
+        _state.update { it.copy(dashboard = api.bootstrap(), pendingSyncCount = sync.pending, message = if (sync.applied > 0) "Workspace refreshed / ${sync.applied} queued changes synced" else "Workspace refreshed") }
     }
 
     fun loadRegistry(query: String = "", page: Int = 0) = launchWork {
@@ -220,7 +238,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
 
     fun loadRepairs() = launchWork {
         if (demo) return@launchWork
-        _state.update { it.copy(repairPool = api.repairPool()) }
+        _state.update { it.copy(repairPool = api.repairPool(), supervisors = api.supervisors()) }
     }
 
     fun loadReviews() = launchWork {
@@ -298,21 +316,51 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         checklist: Map<String, String>,
         done: () -> Unit,
     ) = launchWork {
-        api.installBySerials(truck, company, mother, subs, mode, checklist)
-        val (items, total) = api.installationHistory()
-        _state.update { it.copy(installations = items, installationTotal = total, installationPage = 0, message = "Installation recorded") }
+        val sync = api.installBySerials(truck, company, mother, subs, mode, checklist)
+        if (sync.applied > 0) {
+            val (items, total) = api.installationHistory()
+            _state.update { it.copy(installations = items, installationTotal = total, installationPage = 0, pendingSyncCount = sync.pending, message = "Installation recorded") }
+        } else {
+            _state.update { it.copy(pendingSyncCount = sync.pending, message = "Installation saved on this device / pending sync") }
+        }
         done()
     }
 
     fun triage(deviceId: String, outcome: String) = launchWork {
-        api.triage(deviceId, outcome)
-        _state.update { it.copy(repairPool = api.repairPool(), message = if (outcome == "revived") "Device returned to available" else "Device declared dead") }
+        val sync = api.triage(deviceId, outcome)
+        val pool = if (sync.applied > 0) api.repairPool() else _state.value.repairPool
+        _state.update { it.copy(repairPool = pool, pendingSyncCount = sync.pending, message = if (sync.applied > 0) {
+            if (outcome == "revived") "Device returned to available" else "Device declared dead"
+        } else "Repair decision saved on this device / pending sync") }
     }
 
     fun reportFault(payload: org.json.JSONObject, done: () -> Unit) = launchWork {
-        api.reportFault(payload)
-        _state.update { it.copy(message = "Fault report recorded") }
+        val sync = api.reportFault(payload)
+        _state.update { it.copy(pendingSyncCount = sync.pending, message = if (sync.applied > 0) "Fault report recorded" else "Fault report saved on this device / pending sync") }
         done()
+    }
+
+    fun syncQueue(showMessage: Boolean = true) {
+        if (demo || _state.value.dashboard == null) return
+        viewModelScope.launch {
+            val sync = api.syncPending()
+            val refreshed = if (sync.applied > 0) runCatching { api.bootstrap() }.getOrNull() else null
+            _state.update { current -> current.copy(
+                dashboard = refreshed ?: current.dashboard,
+                pendingSyncCount = sync.pending,
+                message = if (!showMessage) current.message else when {
+                    sync.pending == 0 && sync.applied > 0 -> "${sync.applied} queued changes synced"
+                    sync.pending == 0 -> "Sync queue is clear"
+                    !sync.reachedServer -> "Still offline / ${sync.pending} changes safely queued"
+                    else -> "${sync.pending} changes still need server review"
+                },
+            ) }
+        }
+    }
+
+    fun setTruckCompany(truckId: String, company: String, notes: String, label: String) = launchWork {
+        api.setTruckCompany(truckId, company, notes)
+        _state.update { it.copy(lookup = api.lookup(label), message = "Serving company updated") }
     }
 
     fun loadSettings() = launchWork {
@@ -553,7 +601,7 @@ private fun TabletRail(state: NativeUiState, compact: Boolean, open: (AppScreen)
                 if (!compact) {
                     Text("SYSTEM / ONLINE", style = MaterialTheme.typography.labelMedium)
                     Text("REVISION / 03.0", style = MaterialTheme.typography.labelMedium)
-                    Text("SYNC QUEUE / 000", style = MaterialTheme.typography.labelMedium)
+                    Text("SYNC QUEUE / ${state.pendingSyncCount.toString().padStart(3, '0')}", style = MaterialTheme.typography.labelMedium, color = if (state.pendingSyncCount > 0) SafetyAmber else IndustrialText)
                 }
             }
             Row(Modifier.fillMaxWidth().clickable(onClick = logout).border(BorderStroke(1.dp, Rule)).padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start) {
@@ -615,6 +663,7 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
     Column(modifier.fillMaxSize()) {
         if (state.error != null) StatusStrip(state.error, true, model::clearNotice)
         else if (state.message != null) StatusStrip(state.message, false, model::clearNotice)
+        if (state.pendingSyncCount > 0) PendingQueueStrip(state.pendingSyncCount, state.working) { model.syncQueue() }
         when (state.selected) {
             AppScreen.Dashboard -> DashboardScreen(state.dashboard!!, model::open)
             AppScreen.Register -> RegisterParityScreen(state, model)
@@ -624,6 +673,18 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
             AppScreen.Review -> ReviewScreen(state, model)
             AppScreen.Settings -> SettingsParityScreen(state, model)
         }
+    }
+}
+
+@Composable
+private fun PendingQueueStrip(count: Int, working: Boolean, retry: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().background(Color(0xFF3A2C0A)).border(BorderStroke(1.dp, SafetyAmber)).padding(horizontal = 14.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Refresh, null, tint = SafetyAmber, modifier = Modifier.size(18.dp))
+        Text("$count CHANGE${if (count == 1) "" else "S"} SAFELY QUEUED", Modifier.padding(horizontal = 9.dp).weight(1f), color = Color.White, style = MaterialTheme.typography.labelMedium)
+        TextButton(onClick = retry, enabled = !working) { Text("RETRY", color = SafetyAmber) }
     }
 }
 
@@ -1185,11 +1246,13 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
     var description by remember { mutableStateOf("") }
     var remoteOpen by remember { mutableStateOf("not_applicable") }
     var staticUsed by remember { mutableStateOf("no") }
+    var staticAuthBy by remember { mutableStateOf("") }
     var resolution by remember { mutableStateOf("pending") }
     var minutes by remember { mutableStateOf("") }
     var followup by remember { mutableStateOf("no") }
     var followupDetails by remember { mutableStateOf("") }
     var incidentStatus by remember { mutableStateOf("open_pending_followup") }
+    var closureBy by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
     var scanDevice by remember { mutableStateOf(false) }
 
@@ -1215,11 +1278,13 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                 OutlinedTextField(description, { description = it }, Modifier.fillMaxWidth(), label = { Text("Fault description") }, minLines = 3)
                 ChoiceLine("Remote open", remoteOpen, listOf("success" to "Success", "failed" to "Failed", "not_applicable" to "N/A")) { remoteOpen = it }
                 ChoiceLine("Static password used", staticUsed, listOf("yes" to "Yes", "no" to "No")) { staticUsed = it }
+                if (staticUsed == "yes") ChoiceLine("Static password authorised by", staticAuthBy, state.supervisors) { staticAuthBy = it }
                 ChoiceLine("Resolution", resolution, listOf("resolved_remotely" to "Remote", "static_password_issued" to "Static PW", "device_reconfigured" to "Reconfigured", "device_replaced" to "Replaced", "pending" to "Pending", "escalated" to "Escalated")) { resolution = it }
                 OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("Minutes to resolve") }, singleLine = true)
                 ChoiceLine("Follow-up required", followup, listOf("yes" to "Yes", "no" to "No")) { followup = it }
                 if (followup == "yes") OutlinedTextField(followupDetails, { followupDetails = it }, Modifier.fillMaxWidth(), label = { Text("Follow-up details") }, minLines = 2)
                 ChoiceLine("Incident status", incidentStatus, listOf("closed" to "Closed", "open_pending_followup" to "Open / follow-up")) { incidentStatus = it }
+                if (incidentStatus == "closed") ChoiceLine("Closure approved by", closureBy, state.supervisors) { closureBy = it }
                 OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Notes") }, minLines = 2)
                 Button(
                     onClick = {
@@ -1228,10 +1293,13 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                             .put("locksAffected", org.json.JSONArray(affected.toList())).put("truckLocation", location).put("deviceOnline", online)
                             .put("description", description).put("remoteOpen", remoteOpen).put("staticPwUsed", staticUsed).put("resolution", resolution)
                             .put("followupRequired", followup).put("followupDetails", followupDetails).put("incidentStatus", incidentStatus).put("notes", notes)
+                            .put("staticPwAuthBy", if (staticUsed == "yes") staticAuthBy else org.json.JSONObject.NULL)
+                            .put("closureBy", if (incidentStatus == "closed") closureBy else org.json.JSONObject.NULL)
                         minutes.toIntOrNull()?.let { payload.put("minutesToResolve", it) }
                         model.reportFault(payload) { description = ""; notes = ""; faultOpen = false }
                     },
-                    enabled = !state.working && truck.isNotBlank() && device.isNotBlank() && description.isNotBlank() && affected.isNotEmpty(),
+                    enabled = !state.working && truck.isNotBlank() && device.isNotBlank() && description.isNotBlank() && affected.isNotEmpty()
+                        && (staticUsed != "yes" || staticAuthBy.isNotBlank()) && (incidentStatus != "closed" || closureBy.isNotBlank()),
                     modifier = Modifier.fillMaxWidth().height(52.dp), shape = RectangleShape,
                 ) { Text("SUBMIT FAULT REPORT") }
             }
@@ -1305,6 +1373,8 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
     var query by remember { mutableStateOf("") }
     var recent by remember { mutableStateOf(listOf<String>()) }
     val result = state.lookup
+    var correctionCompany by remember(result?.targetId) { mutableStateOf(result?.company?.lowercase()?.takeIf { result.companyDeclared }.orEmpty()) }
+    var correctionNotes by remember(result?.targetId) { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", if (result?.targetKind == "unknown" || result == null) "00" else "01", "Search a truck plate or mother serial and inspect the complete operational cockpit.") }
         item {
@@ -1358,6 +1428,17 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
                         Button(onClick = { model.open(AppScreen.Install) }, shape = RectangleShape) { Text("OPEN INSTALL") }
                         OutlinedButton(onClick = { model.open(AppScreen.Repairs) }, shape = RectangleShape) { Text("REPORT / REPAIR") }
                         if (result.reviews > 0 && state.dashboard?.user?.role == "supervisor") OutlinedButton(onClick = { model.open(AppScreen.Review) }, shape = RectangleShape) { Text("OPEN REVIEWS") }
+                    }
+                    if (state.dashboard?.user?.role == "supervisor" && result.targetKind == "truck" && result.targetId != null) {
+                        Divider()
+                        Text("SUPERVISOR COMPANY CORRECTION", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                        ChoiceLine("Serving company", correctionCompany, listOf("mrs" to "MRS", "dangote" to "Dangote")) { correctionCompany = it }
+                        OutlinedTextField(correctionNotes, { correctionNotes = it }, Modifier.fillMaxWidth(), label = { Text("Correction notes") }, minLines = 2)
+                        Button(
+                            onClick = { model.setTruckCompany(result.targetId, correctionCompany, correctionNotes, result.label) },
+                            enabled = !state.working && correctionCompany.isNotBlank(),
+                            shape = RectangleShape,
+                        ) { Text("UPDATE SERVING COMPANY") }
                     }
                 }
             }

@@ -138,6 +138,35 @@ describe('sync.service — happy path actually changes the registry', () => {
   });
 });
 
+describe('sync.service — native visible identifiers', () => {
+  it('resolves truck plate and device serial once, then re-acks an idempotent replay', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    createTruck(db, orgId, 'FZE900SY');
+    const deviceId = createDevice(db, orgId, { type: 'mother', serial: 'NATIVE-SYNC-1', status: 'in_service' });
+    const mutation: IncomingMutation = {
+      id: 'native-fault-1',
+      endpoint: '/api/mobile/faults',
+      payload: {
+        truckPlate: 'fze900sy',
+        deviceSerial: 'native-sync-1',
+        locksAffected: ['mother'],
+        description: 'Native offline fault report',
+      },
+      clientTs: 1000,
+      seq: 1,
+    };
+
+    const actor = { id: installerId, orgId, role: 'installer' as const };
+    expect(applySyncBatch(db, { orgId, actor, mutations: [mutation] })[0].status).toBe('applied');
+    expect(applySyncBatch(db, { orgId, actor, mutations: [mutation] })[0].status).toBe('applied');
+
+    const rows = db.select().from(faultReports).where(eq(faultReports.deviceId, deviceId)).all();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].description).toBe('Native offline fault report');
+  });
+});
+
 describe('sync.service — server-authoritative conflict (no last-write-wins)', () => {
   it('a device assigned to two trucks in one batch: first applies, second conflicts; the registry reflects only the winner', () => {
     const { db } = createTestDb();

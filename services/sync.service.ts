@@ -21,6 +21,12 @@ import { recordInstallation } from './installation.service';
 import { dispatchMovementAction } from './movement.service';
 import { applyTriageMovement } from './movement.service';
 import { recordKitVerification } from './verification.service';
+import {
+  createNativeFaultReport,
+  nativeFaultSchema,
+  nativeInstallSchema,
+  recordNativeInstallation,
+} from './native-workflow.service';
 import type { AuthenticatedUser } from './auth.service';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -54,6 +60,14 @@ function dispatch(db: DbClient, orgId: string, actor: AuthenticatedUser, mutatio
     case '/api/installations': {
       const parsed = installKitSchema.parse(mutation.payload);
       return recordInstallation(db, { orgId, actorUserId: actor.id, ...parsed });
+    }
+    case '/api/mobile/installations': {
+      const parsed = nativeInstallSchema.parse(mutation.payload);
+      return recordNativeInstallation(db, { orgId, actorUserId: actor.id, payload: parsed });
+    }
+    case '/api/mobile/faults': {
+      const parsed = nativeFaultSchema.parse(mutation.payload);
+      return createNativeFaultReport(db, { orgId, actorUserId: actor.id, payload: parsed });
     }
     case '/api/movements': {
       const parsed = movementActionSchema.parse(mutation.payload);
