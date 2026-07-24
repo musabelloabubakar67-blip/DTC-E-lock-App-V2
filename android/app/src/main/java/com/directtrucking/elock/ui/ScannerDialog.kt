@@ -65,11 +65,11 @@ fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> U
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            Modifier.widthIn(max = 210.dp).fillMaxWidth().padding(8.dp),
+            Modifier.widthIn(max = 440.dp).fillMaxWidth().padding(12.dp),
             color = MaterialTheme.colorScheme.surface,
             border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
         ) {
-            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (permissionGranted) {
                 CameraScanner(label = label, onScanned = onScanned, onDismiss = onDismiss)
             } else {
@@ -88,14 +88,17 @@ fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> U
 private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val executor = remember { Executors.newSingleThreadExecutor() }
-    val scanner = remember {
+    var retryGeneration by remember { mutableStateOf(0) }
+    val executor = remember(retryGeneration) { Executors.newSingleThreadExecutor() }
+    val scanner = remember(retryGeneration) {
         BarcodeScanning.getClient(
             BarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_ALL_FORMATS).build(),
         )
     }
     var torch by remember { mutableStateOf(false) }
+    var hasTorch by remember { mutableStateOf<Boolean?>(null) }
     var cameraControl by remember { mutableStateOf<androidx.camera.core.CameraControl?>(null) }
+    var cameraError by remember { mutableStateOf<String?>(null) }
     var consumed by remember { mutableStateOf(false) }
     val previewView = remember {
         PreviewView(context).apply {
@@ -104,8 +107,8 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
         }
     }
 
-    Box(Modifier.fillMaxWidth().height(120.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(120.dp))
+    Box(Modifier.fillMaxWidth().height(230.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
+        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(230.dp))
         Row(
             Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Ink.copy(alpha = .88f)).padding(start = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -124,44 +127,76 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (torch) "TORCH / ON" else "TORCH / OFF", style = MaterialTheme.typography.labelMedium, color = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White)
+            Text(
+                when {
+                    hasTorch == false -> "TORCH / UNAVAILABLE"
+                    torch -> "TORCH / ON"
+                    else -> "TORCH / OFF"
+                },
+                style = MaterialTheme.typography.labelMedium,
+                color = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White,
+            )
             IconButton(onClick = {
                 torch = !torch
                 cameraControl?.enableTorch(torch)
-            }) { Icon(if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff, "Toggle torch", tint = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White) }
+            }, enabled = hasTorch == true) {
+                Icon(
+                    if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
+                    if (hasTorch == false) "Torch unavailable" else "Toggle torch",
+                    tint = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White,
+                )
+            }
+        }
+        if (cameraError != null) {
+            Column(
+                Modifier.align(Alignment.Center).fillMaxWidth().background(Ink.copy(alpha = .94f)).padding(18.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(cameraError!!, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.bodyMedium)
+                Button(onClick = {
+                    cameraError = null
+                    consumed = false
+                    retryGeneration += 1
+                }) { Text("Retry camera") }
+            }
         }
     }
 
-    DisposableEffect(lifecycleOwner) {
+    DisposableEffect(lifecycleOwner, retryGeneration) {
+        cameraError = null
         val providerFuture = ProcessCameraProvider.getInstance(context)
         val listener = Runnable {
-            val provider = providerFuture.get()
-            val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
-            val analysis = ImageAnalysis.Builder()
-                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .build()
-            analysis.setAnalyzer(executor) { imageProxy ->
-                val image = imageProxy.image
-                if (image == null || consumed) {
-                    imageProxy.close()
-                } else {
-                    scanner.process(InputImage.fromMediaImage(image, imageProxy.imageInfo.rotationDegrees))
-                        .addOnSuccessListener { barcodes ->
-                            val value = barcodes.firstNotNullOfOrNull { it.rawValue?.trim()?.takeIf(String::isNotEmpty) }
-                            if (value != null && !consumed) {
-                                consumed = true
-                                onScanned(value)
-                            }
-                        }
-                        .addOnCompleteListener { imageProxy.close() }
-                }
-            }
             try {
+                val provider = providerFuture.get()
+                val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
+                val analysis = ImageAnalysis.Builder()
+                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                    .build()
+                analysis.setAnalyzer(executor) { imageProxy ->
+                    val image = imageProxy.image
+                    if (image == null || consumed) {
+                        imageProxy.close()
+                    } else {
+                        scanner.process(InputImage.fromMediaImage(image, imageProxy.imageInfo.rotationDegrees))
+                            .addOnSuccessListener { barcodes ->
+                                val value = barcodes.firstNotNullOfOrNull { it.rawValue?.trim()?.takeIf(String::isNotEmpty) }
+                                if (value != null && !consumed) {
+                                    consumed = true
+                                    onScanned(value)
+                                }
+                            }
+                            .addOnCompleteListener { imageProxy.close() }
+                    }
+                }
                 provider.unbindAll()
                 val camera = provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
                 cameraControl = camera.cameraControl
+                hasTorch = camera.cameraInfo.hasFlashUnit()
             } catch (_: Exception) {
-                onScanned("")
+                cameraControl = null
+                hasTorch = null
+                cameraError = "The camera could not start. Close other camera apps, then retry."
             }
         }
         providerFuture.addListener(listener, ContextCompat.getMainExecutor(context))

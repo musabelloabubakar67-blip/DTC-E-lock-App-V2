@@ -64,7 +64,18 @@ data class InstallationItem(
     val id: String = "",
     val loggedDate: Long = 0,
 )
-data class ReviewItem(val id: String, val kind: String, val payload: String, val createdAt: Long, val status: String = "open")
+data class ReviewDetail(val label: String, val value: String)
+data class ReviewItem(
+    val id: String,
+    val kind: String,
+    val payload: String,
+    val createdAt: Long,
+    val status: String = "open",
+    val title: String = "",
+    val summary: String = "",
+    val details: List<ReviewDetail> = emptyList(),
+    val recommendedAction: String = "",
+)
 data class RepairItem(
     val deviceId: String,
     val serial: String,
@@ -274,7 +285,7 @@ class DtcApi(private val context: Context) {
                 }
             },
             reviews = reviews.size,
-            audit = data.optJSONArray("audit").feed("summary", "entityTable"),
+            audit = data.optJSONArray("audit").lookupAuditFeed(),
             targetId = data.getJSONObject("target").nullableString("id"),
             companyDeclared = data.getJSONObject("company").optBoolean("declared"),
             latestVerifiedAt = data.getJSONObject("trust").nullableLong("latestVerifiedAt"),
@@ -294,6 +305,29 @@ class DtcApi(private val context: Context) {
 
     suspend fun reviews(): List<ReviewItem> = withContext(Dispatchers.IO) {
         get("/api/reviews").getJSONArray("data").reviewItems()
+    }
+
+    suspend fun verifyKit(
+        truckPlate: String?,
+        motherSerial: String,
+        subSerials: List<String>,
+        motherSource: String,
+        subSources: List<String>,
+    ): NativeSyncResult = withContext(Dispatchers.IO) {
+        enqueueAndSync(
+            "/api/verifications",
+            JSONObject()
+                .putOptional("truckId", truckPlate)
+                .put("motherSerial", motherSerial)
+                .put("motherSource", motherSource)
+                .put("subs", JSONArray().apply {
+                    subSerials.forEachIndexed { index, serial ->
+                        if (serial.isNotBlank()) {
+                            put(JSONObject().put("serial", serial).put("source", subSources.getOrNull(index) ?: "manual"))
+                        }
+                    }
+                }),
+        )
     }
 
     suspend fun repairPool(): List<RepairItem> = withContext(Dispatchers.IO) {
@@ -598,17 +632,204 @@ private fun JSONObject.nullableString(key: String): String? = if (isNull(key)) n
 private fun JSONObject.nullableLong(key: String): Long? = if (!has(key) || isNull(key)) null else optLong(key)
 private fun JSONObject.putOptional(key: String, value: String?): JSONObject = apply { if (!value.isNullOrBlank()) put(key, value) }
 private fun JSONArray?.strings(): List<String> = if (this == null) emptyList() else buildList { for (index in 0 until length()) add(optString(index)) }
+private data class NativeReviewPresentation(
+    val title: String,
+    val summary: String,
+    val details: List<ReviewDetail>,
+    val recommendedAction: String,
+)
+
 private fun JSONArray?.reviewItems(): List<ReviewItem> = if (this == null) emptyList() else buildList {
     for (index in 0 until length()) {
         val item = getJSONObject(index)
-        val payload = when (val raw = item.opt("payload")) {
-            is JSONObject -> raw.toString(2)
-            is JSONArray -> raw.toString(2)
-            else -> raw?.toString().orEmpty()
+        val rawPayload = item.opt("payload")
+        val payloadObject = rawPayload as? JSONObject ?: JSONObject()
+        val payload = when (rawPayload) {
+            is JSONObject -> rawPayload.toString(2)
+            is JSONArray -> rawPayload.toString(2)
+            else -> rawPayload?.toString().orEmpty()
+        }
+        val fallback = localReviewPresentation(item.optString("kind"), payloadObject)
+        val presentation = item.optJSONObject("presentation")
+        val details = presentation?.optJSONArray("details")
+        val parsedDetails = buildList {
+            if (details != null) {
+                for (detailIndex in 0 until details.length()) {
+                    val detail = details.getJSONObject(detailIndex)
+                    add(ReviewDetail(detail.optString("label"), detail.optString("value")))
+                }
+            }
         }
         add(ReviewItem(
-            item.getString("id"), item.optString("kind"), payload, item.optLong("createdAt"),
-            item.optString("status", "open"),
+            id = item.getString("id"),
+            kind = item.optString("kind"),
+            payload = payload,
+            createdAt = item.optLong("createdAt"),
+            status = item.optString("status", "open"),
+            title = presentation?.optString("title")?.takeIf(String::isNotBlank) ?: fallback.title,
+            summary = presentation?.optString("summary")?.takeIf(String::isNotBlank) ?: fallback.summary,
+            details = parsedDetails.ifEmpty { fallback.details },
+            recommendedAction = presentation?.optString("recommendedAction")?.takeIf(String::isNotBlank)
+                ?: fallback.recommendedAction,
+        ))
+    }
+}
+
+private fun localReviewPresentation(kind: String, payload: JSONObject): NativeReviewPresentation {
+    if (kind == "unlogged_swap") {
+        val truck = payload.firstReviewText("truckLabel", "truckId").ifBlank { "the selected truck" }
+        return NativeReviewPresentation(
+            title = "Physical kit differed from the registry",
+            summary = "A verification on $truck found different physical lock serials from the registry.",
+            details = reviewDetails(
+                "Truck" to truck,
+                "Previously recorded mother" to payload.reviewText("expectedMotherSerial").ifBlank { "None recorded" },
+                "Scanned mother" to payload.reviewText("observedMotherSerial"),
+                "Previously recorded sub-locks" to payload.reviewList("expectedSubSerials"),
+                "Scanned sub-locks" to payload.reviewList("observedSubSerials"),
+            ),
+            recommendedAction = "Confirm the physical scan. If it is correct, mark this review as reviewed.",
+        )
+    }
+
+    if (kind == "sync_conflict") {
+        val queued = payload.optJSONObject("queuedMutation") ?: JSONObject()
+        return NativeReviewPresentation(
+            title = "Offline change could not be applied",
+            summary = "A field-device change conflicted with newer server data. Nothing was silently overwritten.",
+            details = reviewDetails(
+                "Operation" to queued.reviewText("endpoint").ifBlank { "Offline change" },
+                "Reason" to payload.reviewText("error").ifBlank { "The server record changed before sync completed" },
+                "Saved on device" to queued.reviewText("clientTs"),
+            ),
+            recommendedAction = "Check the current truck or kit state and repeat the intended action if it is still required.",
+        )
+    }
+
+    val reason = payload.reviewText("reason")
+    val row = payload.optJSONObject("row") ?: JSONObject()
+    if (reason == "kit_mismatch_updated_registry") {
+        val truck = row.reviewText("truck")
+        return NativeReviewPresentation(
+            title = "Installation history differs from the registered kit",
+            summary = "The installation entry${truck.takeIf(String::isNotBlank)?.let { " for $it" }.orEmpty()} lists different lock serials from the registration record.",
+            details = reviewDetails(
+                "Truck" to truck,
+                "Mother lock" to row.reviewText("mother"),
+                "Installation B / C / D" to row.reviewSlots("install_sub_"),
+                "Registered B / C / D" to row.reviewSlots("registry_sub_"),
+                "Installation source row" to row.reviewText("install_row"),
+                "Registry source row" to row.reviewText("registry_row"),
+            ),
+            recommendedAction = "Verify the physical kit. If it matches the registry, mark this review as reviewed.",
+        )
+    }
+    if (reason == "invalid_masterlist_kit") {
+        val subs = row.reviewValues("sub_b", "sub_c", "sub_d")
+        val motherOnly = subs.isEmpty()
+        return NativeReviewPresentation(
+            title = if (motherOnly) "Mother-only registration record" else "Incomplete registration record",
+            summary = if (motherOnly) {
+                "This registration contains a mother lock without sub-locks. That can be valid, but it should be confirmed."
+            } else {
+                "This registration lists ${subs.size} of the three expected sub-locks."
+            },
+            details = reviewDetails(
+                "Mother lock" to row.reviewText("mother"),
+                "Sub-locks listed" to subs.joinToString(", ").ifBlank { "None" },
+                "SIM" to row.reviewText("sim"),
+                "Source row" to row.reviewText("source_row"),
+            ),
+            recommendedAction = "Confirm whether this was intentionally registered as mother-only or complete the actual kit.",
+        )
+    }
+    if (reason == "masterlist_sub_in_multiple_kits") {
+        return NativeReviewPresentation(
+            title = "Sub-lock appears in more than one registered kit",
+            summary = "One or more sub-lock serials are assigned to multiple registration kits.",
+            details = reviewDetails(
+                "Mother lock" to row.reviewText("mother"),
+                "Duplicated sub-locks" to payload.reviewList("duplicated_subs"),
+                "Kit B / C / D" to row.reviewValues("sub_b", "sub_c", "sub_d").joinToString(", "),
+                "Source row" to row.reviewText("source_row"),
+            ),
+            recommendedAction = "Check the physical kits and keep each sub-lock with the correct mother.",
+        )
+    }
+    if (reason == "mother_missing_registration_masterlist") {
+        return NativeReviewPresentation(
+            title = "Installed mother is missing from registration records",
+            summary = "An installation uses a mother lock that was not found in the registration masterlist.",
+            details = reviewDetails(
+                "Truck" to row.reviewText("truck"),
+                "Mother lock" to row.reviewText("mother"),
+                "Sub-locks" to row.reviewValues("sub_b", "sub_c", "sub_d").joinToString(", "),
+                "Installer" to row.reviewText("team_member"),
+                "Installation source row" to row.reviewText("source_row"),
+            ),
+            recommendedAction = "Confirm the physical kit, then register the missing mother with only its actual sub-locks.",
+        )
+    }
+
+    val identity = row.firstReviewText("truck", "mother", "source_row")
+    return NativeReviewPresentation(
+        title = reason.reviewSentence().ifBlank { "Data conflict needs review" },
+        summary = if (identity.isBlank()) "Two records disagree and need a supervisor decision."
+            else "A conflict affecting $identity needs a supervisor decision.",
+        details = buildList {
+            val keys = row.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                val value = row.reviewText(key)
+                if (value.isNotBlank()) add(ReviewDetail(key.reviewSentence(), value))
+            }
+        },
+        recommendedAction = "Check the listed source record and current physical state before closing this review.",
+    )
+}
+
+private fun reviewDetails(vararg rows: Pair<String, String>): List<ReviewDetail> =
+    rows.filter { it.second.isNotBlank() }.map { ReviewDetail(it.first, it.second) }
+
+private fun JSONObject.reviewText(key: String): String {
+    val value = opt(key)
+    return when (value) {
+        null, JSONObject.NULL -> ""
+        is String, is Number, is Boolean -> value.toString().trim()
+        else -> ""
+    }
+}
+
+private fun JSONObject.firstReviewText(vararg keys: String): String =
+    keys.firstNotNullOfOrNull { key -> reviewText(key).takeIf(String::isNotBlank) }.orEmpty()
+
+private fun JSONObject.reviewList(key: String): String {
+    val values = optJSONArray(key) ?: return reviewText(key)
+    return buildList {
+        for (index in 0 until values.length()) {
+            values.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
+        }
+    }.joinToString(", ")
+}
+
+private fun JSONObject.reviewValues(vararg keys: String): List<String> =
+    keys.map(::reviewText).filter(String::isNotBlank)
+
+private fun JSONObject.reviewSlots(prefix: String): String =
+    listOf("b", "c", "d").joinToString(" / ") { slot -> reviewText("$prefix$slot").ifBlank { "Missing" } }
+
+private fun String.reviewSentence(): String {
+    val words = replace('_', ' ').trim()
+    return words.replaceFirstChar { character -> character.uppercase() }
+}
+
+private fun JSONArray?.lookupAuditFeed(): List<FeedItem> = if (this == null) emptyList() else buildList {
+    for (index in 0 until length()) {
+        val item = getJSONObject(index)
+        add(FeedItem(
+            title = item.optString("summary", "Activity"),
+            detail = item.optString("detail", item.optString("entityTable")),
+            timestamp = item.optLong("createdAt"),
         ))
     }
 }

@@ -91,11 +91,12 @@ describe('lookup cockpit view model', () => {
     ]);
   });
 
-  it('open conflict reviews appear in the cockpit view model for the same org only', () => {
+  it('returns only conflict reviews related to the searched truck', () => {
     const { db } = createTestDb();
     const { orgId } = seedBaseFixtures(db);
     const otherOrgId = createId();
     const reviewId = createId();
+    const truckId = createTruck(db, orgId, 'LOOK123');
 
     db.insert(organisations).values({ id: otherOrgId, name: 'Other Org' }).run();
 
@@ -104,7 +105,16 @@ describe('lookup cockpit view model', () => {
         id: reviewId,
         orgId,
         kind: 'unlogged_swap',
-        payloadJson: JSON.stringify({ truckId: 'T1', observedMotherSerial: 'M1' }),
+        payloadJson: JSON.stringify({ truckId, truckLabel: 'LOOK123', observedMotherSerial: 'M1' }),
+        status: 'open',
+      })
+      .run();
+    db.insert(conflictReviews)
+      .values({
+        id: createId(),
+        orgId,
+        kind: 'unlogged_swap',
+        payloadJson: JSON.stringify({ truckId: 'UNRELATED', truckLabel: 'OTHER123' }),
         status: 'open',
       })
       .run();
@@ -118,9 +128,10 @@ describe('lookup cockpit view model', () => {
       })
       .run();
 
-    const view = getLookupCockpit(db, { orgId, query: '' });
+    const view = getLookupCockpit(db, { orgId, query: 'LOOK123' });
 
     expect(view.reviews.map((review) => review.id)).toEqual([reviewId]);
+    expect(view.reviews[0].presentation.title).toBe('Physical kit differed from the registry');
   });
 
   it('missing audit and sync data render as empty arrays, not production demo rows', () => {

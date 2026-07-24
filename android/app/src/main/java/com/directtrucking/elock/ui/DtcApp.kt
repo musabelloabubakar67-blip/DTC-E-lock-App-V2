@@ -159,6 +159,8 @@ data class NativeUiState(
     val themeMode: ThemeMode = ThemeMode.Dark,
     val compactMode: Boolean = false,
     val pendingSyncCount: Int = 0,
+    val workflowTruck: String = "",
+    val workflowDevice: String = "",
 )
 
 class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) : ViewModel() {
@@ -205,7 +207,15 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
     }
 
     fun open(screen: AppScreen) {
-        _state.update { it.copy(selected = screen, message = null, error = null) }
+        _state.update {
+            it.copy(
+                selected = screen,
+                workflowTruck = "",
+                workflowDevice = "",
+                message = null,
+                error = null,
+            )
+        }
         if (demo) return
         syncQueue(false)
         when (screen) {
@@ -252,6 +262,56 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
             return@launchWork
         }
         _state.update { it.copy(lookup = api.lookup(query)) }
+    }
+
+    fun openInstallFromLookup() {
+        val lookup = _state.value.lookup ?: return
+        val truck = lookup.label.takeIf { lookup.targetKind == "truck" }.orEmpty()
+        _state.update {
+            it.copy(
+                selected = AppScreen.Install,
+                workflowTruck = truck,
+                workflowDevice = lookup.mother.orEmpty(),
+                message = null,
+                error = null,
+            )
+        }
+        loadInstallations()
+    }
+
+    fun openRepairsFromLookup() {
+        val lookup = _state.value.lookup ?: return
+        _state.update {
+            it.copy(
+                selected = AppScreen.Repairs,
+                workflowTruck = lookup.label.takeIf { lookup.targetKind == "truck" }.orEmpty(),
+                workflowDevice = lookup.mother.orEmpty(),
+                message = null,
+                error = null,
+            )
+        }
+        loadRepairs()
+    }
+
+    fun verifyLookupKit(
+        truck: String?,
+        mother: String,
+        subs: List<String>,
+        motherSource: String,
+        subSources: List<String>,
+        done: () -> Unit,
+    ) = launchWork {
+        val sync = api.verifyKit(truck, mother, subs, motherSource, subSources)
+        val query = truck?.takeIf(String::isNotBlank) ?: mother
+        _state.update {
+            it.copy(
+                lookup = if (sync.applied > 0) api.lookup(query) else it.lookup,
+                reviews = if (sync.applied > 0 && it.dashboard?.user?.role == "supervisor") api.reviews() else it.reviews,
+                pendingSyncCount = sync.pending,
+                message = if (sync.applied > 0) "Physical kit verified" else "Verification saved on this device / pending sync",
+            )
+        }
+        done()
     }
 
     fun register(mother: String, subs: List<String>, sim: String, config: Map<String, String>, done: () -> Unit) = launchWork {
@@ -729,7 +789,13 @@ private fun PageHeader(kicker: String, title: String, accent: String, metric: St
                 titleBlock()
                 Divider(color = MaterialTheme.colorScheme.outline)
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text(metric, Modifier.width(86.dp).padding(14.dp), style = MaterialTheme.typography.headlineMedium)
+                    Text(
+                        metric,
+                        Modifier.width(118.dp).padding(14.dp),
+                        style = MaterialTheme.typography.headlineMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Clip,
+                    )
                     Text(detail.uppercase(), Modifier.weight(1f).padding(14.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
@@ -869,7 +935,10 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "The same registration checks, session retry, ownership controls and archive used on the web app.") }
         item {
-            OutlinedButton(onClick = { formOpen = !formOpen }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+            OutlinedButton(onClick = {
+                formOpen = !formOpen
+                if (formOpen) archiveOpen = false
+            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
                 Icon(if (formOpen) Icons.Outlined.Close else Icons.Outlined.AddBox, null); Spacer(Modifier.width(8.dp)); Text(if (formOpen) "COLLAPSE REGISTRATION FORM" else "NEW REGISTRATION")
             }
         }
@@ -901,7 +970,10 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
             }
         }
         item {
-            OutlinedButton(onClick = { archiveOpen = !archiveOpen }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+            OutlinedButton(onClick = {
+                archiveOpen = !archiveOpen
+                if (archiveOpen) formOpen = false
+            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
                 Icon(Icons.Outlined.ListAlt, null); Spacer(Modifier.width(8.dp)); Text(if (archiveOpen) "CLOSE REGISTERED KITS" else "OPEN REGISTERED KITS (${state.registryTotal})")
             }
         }
@@ -923,18 +995,25 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
                 state.registry.forEach { item ->
                     Surface(Modifier.fillMaxWidth().clickable { selected = if (item.id in selected) selected - item.id else selected + item.id }, color = if (item.id in selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
                         Column(Modifier.padding(12.dp)) {
-                            Row { Text(if (item.id in selected) "[X] ${item.mother}" else "[ ] ${item.mother}", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Text(item.ownership.replace('_', ' ').uppercase(), color = if (item.ownership == "owned") SignalGreen else DtcRed, style = MaterialTheme.typography.labelMedium) }
-                            Text("B/C/D  ${item.subs.joinToString(" / ")}")
+                            ArchiveItemHeader(
+                                if (item.id in selected) "[X] ${item.mother}" else "[ ] ${item.mother}",
+                                item.ownership.replace('_', ' '),
+                                if (item.ownership == "owned") SignalGreen else DtcRed,
+                            )
+                            item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
                             Text("SIM ${item.sim} / ${item.actor}", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             item.ownershipNotes?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = { model.loadRegistry(query, state.registryPage - 1) }, enabled = state.registryPage > 0, shape = RectangleShape) { Text("PREV") }
-                    Text("PAGE ${state.registryPage + 1} / ${maxOf(1, (state.registryTotal + 7) / 8)}", style = MaterialTheme.typography.labelMedium)
-                    OutlinedButton(onClick = { model.loadRegistry(query, state.registryPage + 1) }, enabled = (state.registryPage + 1) * 8 < state.registryTotal, shape = RectangleShape) { Text("NEXT") }
-                }
+                ArchivePager(
+                    page = state.registryPage,
+                    pages = maxOf(1, (state.registryTotal + 7) / 8),
+                    previousEnabled = state.registryPage > 0,
+                    nextEnabled = (state.registryPage + 1) * 8 < state.registryTotal,
+                    previous = { model.loadRegistry(query, state.registryPage - 1) },
+                    next = { model.loadRegistry(query, state.registryPage + 1) },
+                )
             }
         }
     }
@@ -1012,7 +1091,7 @@ private fun RegistryArchive(state: NativeUiState, query: String, search: (String
 @Composable
 private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     val context = LocalContext.current
-    var truck by remember { mutableStateOf("") }
+    var truck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
     var company by remember { mutableStateOf("") }
     var mother by remember { mutableStateOf("") }
     var subs by remember { mutableStateOf(listOf("", "", "")) }
@@ -1021,6 +1100,7 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     var checklist by remember { mutableStateOf(mapOf<String, String>()) }
     var query by remember { mutableStateOf("") }
     var archiveOpen by remember { mutableStateOf(false) }
+    var workbenchOpen by remember { mutableStateOf(true) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var shareReady by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -1040,12 +1120,30 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
             }
         }
     }
-    LaunchedEffect(shareReady) { if (shareReady) { delay(120); listState.animateScrollToItem(2) } }
+    LaunchedEffect(shareReady) {
+        if (shareReady) {
+            workbenchOpen = true
+            archiveOpen = false
+            delay(120)
+            listState.animateScrollToItem(4)
+        }
+    }
     val message = remember(truck, company, mother, subs) { installMessage(truck, company, mother, subs) }
     val requiredComplete = listOf("configConfirmed", "deviceResponsive", "sublocksResponsive", "overallStatus").all { !checklist[it].isNullOrBlank() }
 
     LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageHeader("Truck and kit assignment", "Install", "Truck", if (loadedTruck.isBlank()) "00" else "01", "Load the truck first, confirm the serving company, reuse the same kit or scan a changed kit, then complete the re-check.") }
+        item {
+            OutlinedButton(onClick = {
+                workbenchOpen = !workbenchOpen
+                if (workbenchOpen) archiveOpen = false
+            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                Icon(if (workbenchOpen) Icons.Outlined.Close else Icons.Outlined.AddBox, null)
+                Spacer(Modifier.width(8.dp))
+                Text(if (workbenchOpen) "COLLAPSE INSTALLATION FORM" else "NEW INSTALLATION")
+            }
+        }
+        if (workbenchOpen) {
         item {
             Panel("Truck assignment") {
                 OutlinedTextField(truck, { truck = it.uppercase(); loadedTruck = "" }, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
@@ -1110,8 +1208,12 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
             }
         }
+        }
         item {
-            OutlinedButton(onClick = { archiveOpen = !archiveOpen }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+            OutlinedButton(onClick = {
+                archiveOpen = !archiveOpen
+                if (archiveOpen) workbenchOpen = false
+            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
                 Icon(Icons.Outlined.ListAlt, null); Spacer(Modifier.width(8.dp)); Text(if (archiveOpen) "CLOSE INSTALLATION HISTORY" else "OPEN INSTALLATION HISTORY (${state.installationTotal})")
             }
         }
@@ -1122,16 +1224,21 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                 state.installations.forEach { item ->
                     Surface(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
                         Column(Modifier.padding(12.dp)) {
-                            Row { Text(item.truck, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Text(item.status.replace('_', ' ').uppercase(), color = if (item.status == "failed") DtcRed else SignalGreen, style = MaterialTheme.typography.labelMedium) }
-                            Text("Mother ${item.mother}"); Text("B/C/D ${item.subs.joinToString(" / ")}"); Text(item.actor, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ArchiveItemHeader(item.truck, item.status.replace('_', ' '), if (item.status == "failed") DtcRed else SignalGreen)
+                            Text("Mother  ${item.mother}")
+                            item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
+                            Text(item.actor, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                    OutlinedButton(onClick = { model.loadInstallations(query, state.installationPage - 1) }, enabled = state.installationPage > 0, shape = RectangleShape) { Text("PREV") }
-                    Text("PAGE ${state.installationPage + 1} / ${maxOf(1, (state.installationTotal + 4) / 5)}", style = MaterialTheme.typography.labelMedium)
-                    OutlinedButton(onClick = { model.loadInstallations(query, state.installationPage + 1) }, enabled = (state.installationPage + 1) * 5 < state.installationTotal, shape = RectangleShape) { Text("NEXT") }
-                }
+                ArchivePager(
+                    page = state.installationPage,
+                    pages = maxOf(1, (state.installationTotal + 4) / 5),
+                    previousEnabled = state.installationPage > 0,
+                    nextEnabled = (state.installationPage + 1) * 5 < state.installationTotal,
+                    previous = { model.loadInstallations(query, state.installationPage - 1) },
+                    next = { model.loadInstallations(query, state.installationPage + 1) },
+                )
             }
         }
     }
@@ -1235,9 +1342,11 @@ private fun InstallationArchive(state: NativeUiState, query: String, search: (St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
-    var faultOpen by remember { mutableStateOf(false) }
-    var truck by remember { mutableStateOf("") }
-    var device by remember { mutableStateOf("") }
+    var faultOpen by remember(state.workflowTruck, state.workflowDevice) {
+        mutableStateOf(state.workflowTruck.isNotBlank() || state.workflowDevice.isNotBlank())
+    }
+    var truck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
+    var device by remember(state.workflowDevice) { mutableStateOf(state.workflowDevice) }
     var reportedBy by remember { mutableStateOf("self_identified") }
     var faultType by remember { mutableStateOf("device_offline") }
     var affected by remember { mutableStateOf(setOf("mother")) }
@@ -1375,6 +1484,7 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
     val result = state.lookup
     var correctionCompany by remember(result?.targetId) { mutableStateOf(result?.company?.lowercase()?.takeIf { result.companyDeclared }.orEmpty()) }
     var correctionNotes by remember(result?.targetId) { mutableStateOf("") }
+    var verifyOpen by remember(result?.targetId) { mutableStateOf(false) }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", if (result?.targetKind == "unknown" || result == null) "00" else "01", "Search a truck plate or mother serial and inspect the complete operational cockpit.") }
         item {
@@ -1424,10 +1534,23 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
             }
             item {
                 Panel("Operational actions") {
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { model.open(AppScreen.Install) }, shape = RectangleShape) { Text("OPEN INSTALL") }
-                        OutlinedButton(onClick = { model.open(AppScreen.Repairs) }, shape = RectangleShape) { Text("REPORT / REPAIR") }
-                        if (result.reviews > 0 && state.dashboard?.user?.role == "supervisor") OutlinedButton(onClick = { model.open(AppScreen.Review) }, shape = RectangleShape) { Text("OPEN REVIEWS") }
+                    Text("Continue with this truck and its current kit already loaded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { verifyOpen = true }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                            Icon(Icons.Outlined.Shield, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("VERIFY PHYSICAL KIT")
+                        }
+                        OutlinedButton(onClick = model::openInstallFromLookup, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                            Icon(Icons.Outlined.Build, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("INSTALL OR REPLACE KIT")
+                        }
+                        OutlinedButton(onClick = model::openRepairsFromLookup, Modifier.fillMaxWidth(), shape = RectangleShape) {
+                            Icon(Icons.Outlined.HomeRepairService, null)
+                            Spacer(Modifier.width(8.dp))
+                            Text("REPORT FAULT")
+                        }
                     }
                     if (state.dashboard?.user?.role == "supervisor" && result.targetKind == "truck" && result.targetId != null) {
                         Divider()
@@ -1444,11 +1567,117 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
             }
             if (result.reviewItems.isNotEmpty()) item {
                 Panel("Conflict reviews") {
-                    result.reviewItems.forEach { review -> Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(10.dp)) { Text(review.kind.replace('_', ' ').uppercase(), color = DtcRed, style = MaterialTheme.typography.labelLarge); Text(review.payload, maxLines = 5, overflow = TextOverflow.Ellipsis) } }
+                    result.reviewItems.forEach { review ->
+                        Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Text(review.title.ifBlank { review.kind.replace('_', ' ') }, color = DtcRed, style = MaterialTheme.typography.titleMedium)
+                            Text(review.summary.ifBlank { "This asset has an open review." }, style = MaterialTheme.typography.bodyMedium)
+                            review.details.take(3).forEach { detail -> ValueLine(detail.label, detail.value) }
+                            if (state.dashboard?.user?.role == "supervisor") {
+                                OutlinedButton(onClick = { model.open(AppScreen.Review) }, Modifier.fillMaxWidth(), shape = RectangleShape) { Text("OPEN REVIEW") }
+                            }
+                        }
+                    }
                 }
             }
             item { FeedPanel("Audit trail", result.audit) }
         }
+    }
+    if (verifyOpen && result != null && result.targetKind != "unknown") {
+        VerifyKitDialog(
+            result = result,
+            working = state.working,
+            onDismiss = { verifyOpen = false },
+            onSubmit = { truck, mother, subs, motherSource, subSources ->
+                model.verifyLookupKit(truck, mother, subs, motherSource, subSources) { verifyOpen = false }
+            },
+        )
+    }
+}
+
+@Composable
+private fun VerifyKitDialog(
+    result: LookupSnapshot,
+    working: Boolean,
+    onDismiss: () -> Unit,
+    onSubmit: (String?, String, List<String>, String, List<String>) -> Unit,
+) {
+    var mother by remember(result.targetId) { mutableStateOf(result.mother.orEmpty()) }
+    var subs by remember(result.targetId) {
+        mutableStateOf(List(3) { index -> result.subs.getOrNull(index)?.second.orEmpty() })
+    }
+    var motherSource by remember(result.targetId) { mutableStateOf("manual") }
+    var subSources by remember(result.targetId) { mutableStateOf(List(3) { "manual" }) }
+    var scanTarget by remember { mutableStateOf<Int?>(null) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("VERIFY PHYSICAL KIT") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    "Compare each value with the locks on ${result.label}. Scan any lock whose value has changed.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                ScanField("Mother lock", mother, {
+                    mother = it.uppercase()
+                    motherSource = "manual"
+                }) { scanTarget = 0 }
+                subs.forEachIndexed { index, value ->
+                    val slot = listOf("B", "C", "D")[index]
+                    ScanField("Sub-lock $slot", value, { updated ->
+                        subs = subs.toMutableList().also { it[index] = updated.uppercase() }
+                        subSources = subSources.toMutableList().also { it[index] = "manual" }
+                    }) { scanTarget = index + 1 }
+                }
+                Text(
+                    "Submitting records a physical verification. Any mismatch remains visible for supervisor review.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = SafetyAmber,
+                )
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    onSubmit(
+                        result.label.takeIf { result.targetKind == "truck" },
+                        mother,
+                        subs,
+                        motherSource,
+                        subSources,
+                    )
+                },
+                enabled = mother.isNotBlank() && !working,
+                shape = RectangleShape,
+            ) {
+                if (working) {
+                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                } else {
+                    Text("RECORD VERIFICATION")
+                }
+            }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("CANCEL") } },
+    )
+
+    scanTarget?.let { target ->
+        ScannerDialog(
+            label = if (target == 0) "Mother lock" else "Sub-lock ${listOf("B", "C", "D")[target - 1]}",
+            onScanned = { value ->
+                if (target == 0) {
+                    mother = value.uppercase()
+                    motherSource = "qr_scan"
+                } else {
+                    subs = subs.toMutableList().also { it[target - 1] = value.uppercase() }
+                    subSources = subSources.toMutableList().also { it[target - 1] = "qr_scan" }
+                }
+                scanTarget = null
+            },
+            onDismiss = { scanTarget = null },
+        )
     }
 }
 
@@ -1467,8 +1696,17 @@ private fun ReviewScreen(state: NativeUiState, model: DtcViewModel) {
                 Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Outlined.Warning, null, tint = DtcRed)
                     Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
-                        Text(review.kind.replace('_', ' ').uppercase(), style = MaterialTheme.typography.titleMedium)
-                        Text(review.payload, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(
+                            review.title.ifBlank { review.kind.replace('_', ' ') },
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        Text(
+                            review.summary.ifBlank { "This record needs a supervisor to check its evidence." },
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
                     }
                     Icon(Icons.Outlined.ChevronRight, null)
                 }
@@ -1483,17 +1721,65 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
     var notes by remember { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(review.kind.replace('_', ' ').uppercase()) },
+        title = { Text(review.title.ifBlank { review.kind.replace('_', ' ') }) },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text("REVIEW PAYLOAD", style = MaterialTheme.typography.labelMedium, color = DtcRed)
-                Text(review.payload, style = MaterialTheme.typography.bodyMedium)
-                if (canDecide) OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Decision notes") }, minLines = 3)
-                else Text("Supervisor authority is required to resolve or dismiss this review.", color = SafetyAmber)
+                Text("WHAT HAPPENED", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                Text(
+                    review.summary.ifBlank { "This record needs a supervisor to check its evidence." },
+                    style = MaterialTheme.typography.bodyLarge,
+                )
+                if (review.details.isNotEmpty()) {
+                    Divider()
+                    Text("EVIDENCE", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                    review.details.forEach { detail ->
+                        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(
+                                detail.label.uppercase(),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(detail.value, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                }
+                Divider()
+                Text("WHAT TO DO", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                Text(
+                    review.recommendedAction.ifBlank { "Confirm the evidence, then mark the review appropriately." },
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                if (canDecide) {
+                    Text(
+                        "These decisions close the review only. They do not change the registry or installation record.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SafetyAmber,
+                    )
+                    OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Decision notes") }, minLines = 3)
+                } else {
+                    Text("Supervisor authority is required to close this review.", color = SafetyAmber)
+                }
             }
         },
-        confirmButton = { if (canDecide) Button(onClick = { action("resolve", notes) }, colors = ButtonDefaults.buttonColors(containerColor = SignalGreen), shape = RoundedCornerShape(2.dp)) { Text("Resolve") } else TextButton(onClick = onDismiss) { Text("Close") } },
-        dismissButton = { if (canDecide) Row { TextButton(onClick = { action("dismiss", notes) }) { Text("Dismiss review") }; TextButton(onClick = onDismiss) { Text("Cancel") } } },
+        confirmButton = {
+            if (canDecide) {
+                Button(
+                    onClick = { action("resolve", notes) },
+                    colors = ButtonDefaults.buttonColors(containerColor = SignalGreen),
+                    shape = RectangleShape,
+                ) { Text("MARK REVIEWED") }
+            } else {
+                TextButton(onClick = onDismiss) { Text("CLOSE") }
+            }
+        },
+        dismissButton = {
+            if (canDecide) {
+                Column(horizontalAlignment = Alignment.End) {
+                    TextButton(onClick = { action("dismiss", notes) }) { Text("NO ACTION NEEDED") }
+                    TextButton(onClick = onDismiss) { Text("CANCEL") }
+                }
+            }
+        },
     )
 }
 
@@ -1646,12 +1932,70 @@ private fun ChoiceLine(label: String, value: String, options: List<Pair<String, 
 private fun ScanField(label: String, value: String, setValue: (String) -> Unit, scan: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Text(label.uppercase(), style = MaterialTheme.typography.labelMedium)
-        Row(Modifier.fillMaxWidth()) {
-            OutlinedTextField(value, setValue, Modifier.weight(1f), placeholder = { Text("SCAN OR ENTER ${label.uppercase()}") }, singleLine = true)
-            Button(onClick = scan, Modifier.height(56.dp), shape = RectangleShape) {
-                Icon(Icons.Outlined.QrCodeScanner, "Scan $label", Modifier.size(18.dp))
-                Spacer(Modifier.width(7.dp))
-                Text("SCAN")
+        BoxWithConstraints(Modifier.fillMaxWidth()) {
+            if (maxWidth < 390.dp) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    OutlinedTextField(value, setValue, Modifier.fillMaxWidth(), placeholder = { Text("SCAN OR ENTER ${label.uppercase()}") }, singleLine = true)
+                    OutlinedButton(onClick = scan, Modifier.fillMaxWidth().height(48.dp), shape = RectangleShape) {
+                        Icon(Icons.Outlined.QrCodeScanner, "Scan $label", Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("SCAN $label".uppercase())
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth()) {
+                    OutlinedTextField(value, setValue, Modifier.weight(1f), placeholder = { Text("SCAN OR ENTER ${label.uppercase()}") }, singleLine = true)
+                    Button(onClick = scan, Modifier.height(56.dp), shape = RectangleShape) {
+                        Icon(Icons.Outlined.QrCodeScanner, "Scan $label", Modifier.size(18.dp))
+                        Spacer(Modifier.width(7.dp))
+                        Text("SCAN")
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchiveItemHeader(title: String, status: String, statusColor: Color) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 380.dp) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(status.uppercase(), color = statusColor, style = MaterialTheme.typography.labelMedium)
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                Text(status.uppercase(), color = statusColor, style = MaterialTheme.typography.labelMedium)
+            }
+        }
+    }
+}
+
+@Composable
+private fun ArchivePager(
+    page: Int,
+    pages: Int,
+    previousEnabled: Boolean,
+    nextEnabled: Boolean,
+    previous: () -> Unit,
+    next: () -> Unit,
+) {
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+        if (maxWidth < 390.dp) {
+            Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("PAGE ${page + 1} / $pages", style = MaterialTheme.typography.labelMedium)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(previous, Modifier.weight(1f), enabled = previousEnabled, shape = RectangleShape) { Text("PREV") }
+                    OutlinedButton(next, Modifier.weight(1f), enabled = nextEnabled, shape = RectangleShape) { Text("NEXT") }
+                }
+            }
+        } else {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                OutlinedButton(previous, enabled = previousEnabled, shape = RectangleShape) { Text("PREV") }
+                Text("PAGE ${page + 1} / $pages", style = MaterialTheme.typography.labelMedium)
+                OutlinedButton(next, enabled = nextEnabled, shape = RectangleShape) { Text("NEXT") }
             }
         }
     }

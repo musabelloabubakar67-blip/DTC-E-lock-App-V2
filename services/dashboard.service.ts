@@ -11,7 +11,7 @@ import {
 import { getTrustStatesForMothers } from './verification.service';
 import { listRegistrations, type RegistrationListItem } from './registration.service';
 import { listRepairPool, type RepairPoolItem } from './lookup.service';
-import type { ConflictReviewListItem } from './review.service';
+import { presentConflictReview, type ConflictReviewListItem } from './review.service';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DbClient = any;
@@ -168,13 +168,17 @@ function listOpenReviewsForOrg(db: DbClient, orgId: string): ConflictReviewListI
     createdAt: number;
   }>;
 
-  return rows.map((row) => ({
-    id: row.id,
-    kind: row.kind,
-    status: row.status,
-    payload: JSON.parse(row.payloadJson),
-    createdAt: row.createdAt,
-  }));
+  return rows.map((row) => {
+    const payload = JSON.parse(row.payloadJson) as Record<string, unknown>;
+    return {
+      id: row.id,
+      kind: row.kind,
+      status: row.status,
+      payload,
+      presentation: presentConflictReview(row.kind, payload),
+      createdAt: row.createdAt,
+    };
+  });
 }
 
 function listLatestAudit(db: DbClient, orgId: string, limit: number): DashboardViewModel['audit'] {

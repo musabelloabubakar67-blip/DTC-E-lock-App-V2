@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { conflictReviews, devices, truckAssignments, auditLog } from '../../db/schema';
+import { conflictReviews, devices, truckAssignments, auditLog, organisations, users } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
 import { listOpenConflictReviews, resolveConflictReview, dismissConflictReview } from '../review.service';
@@ -72,7 +72,7 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     // Only an unlogged_swap review exists — no sync_conflict rows anywhere in the DB.
     openReview(db, orgId, 'unlogged_swap', { note: 'only kind that currently exists' });
 
-    const reviews = listOpenConflictReviews(db);
+    const reviews = listOpenConflictReviews(db, orgId);
     const syncConflicts = reviews.filter((r) => r.kind === 'sync_conflict');
 
     expect(syncConflicts).toEqual([]);
@@ -98,6 +98,31 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     expect(db.select().from(conflictReviews).where(eq(conflictReviews.id, reviewB)).get()!.status).toBe('open');
   });
 
+  it('does not list or transition another organisation review', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const otherOrgId = createId();
+    const otherSupervisorId = createId();
+    db.insert(organisations).values({ id: otherOrgId, name: 'Other Org' }).run();
+    db.insert(users).values({
+      id: otherSupervisorId,
+      orgId: otherOrgId,
+      username: 'other-sup',
+      displayName: 'Other Supervisor',
+      passwordHash: 'x',
+      role: 'supervisor',
+    }).run();
+    const ownReview = openReview(db, orgId, 'unlogged_swap', { truck: 'OWN-01' });
+    const otherReview = openReview(db, otherOrgId, 'unlogged_swap', { truck: 'OTHER-01' });
+
+    expect(listOpenConflictReviews(db, orgId).map((review) => review.id)).toEqual([ownReview]);
+    expect(() => resolveConflictReview(db, {
+      reviewId: otherReview,
+      actor: { id: supervisorId, orgId, role: 'supervisor' },
+    })).toThrow();
+    expect(db.select().from(conflictReviews).where(eq(conflictReviews.id, otherReview)).get()!.status).toBe('open');
+  });
+
   it('a sync_conflict produced by sync.service.ts actually shows up on the Review list, in the shape the page renders', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);
@@ -111,7 +136,7 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     ];
     applySyncBatch(db, { orgId, actor: { id: installerId, orgId, role: 'installer' }, mutations });
 
-    const openReviews = listOpenConflictReviews(db);
+    const openReviews = listOpenConflictReviews(db, orgId);
     const syncConflict = openReviews.find((r) => r.kind === 'sync_conflict');
 
     expect(syncConflict).toBeTruthy();

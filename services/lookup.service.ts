@@ -12,7 +12,7 @@ import {
   users,
 } from '../db/schema';
 import { getTrustState, type TrustStateResult } from './verification.service';
-import type { ConflictReviewListItem } from './review.service';
+import { presentConflictReview, type ConflictReviewListItem } from './review.service';
 import type { TruckCompany } from './installation.service';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -61,6 +61,7 @@ export type LookupCockpitViewModel = {
     entityTable: string;
     entityId: string;
     summary: string;
+    detail: string;
   }>;
 };
 
@@ -74,7 +75,12 @@ function emptyTrust(): TrustStateResult {
   return { state: 'unverified', latestVerifiedAt: null, weakestTier: null };
 }
 
-function listOpenConflictReviewsForOrg(db: DbClient, orgId: string): ConflictReviewListItem[] {
+function listOpenConflictReviewsForTarget(
+  db: DbClient,
+  orgId: string,
+  references: Set<string>,
+): ConflictReviewListItem[] {
+  if (references.size === 0) return [];
   const rows = db
     .select()
     .from(conflictReviews)
@@ -82,51 +88,81 @@ function listOpenConflictReviewsForOrg(db: DbClient, orgId: string): ConflictRev
     .orderBy(desc(conflictReviews.createdAt))
     .all();
 
-  return rows.map(
+  return rows.flatMap(
     (row: {
       id: string;
       kind: ConflictReviewListItem['kind'];
       status: ConflictReviewListItem['status'];
       payloadJson: string;
       createdAt: number;
-    }) => ({
-      id: row.id,
-      kind: row.kind,
-      status: row.status,
-      payload: JSON.parse(row.payloadJson),
-      createdAt: row.createdAt,
-    }),
+    }) => {
+      const payload = parseRecord(row.payloadJson);
+      if (!recordMatchesReferences(payload, references)) return [];
+      return [{
+        id: row.id,
+        kind: row.kind,
+        status: row.status,
+        payload,
+        presentation: presentConflictReview(row.kind, payload),
+        createdAt: row.createdAt,
+      }];
+    },
   );
 }
 
 function buildAuditSummary(row: { operation: string; entityTable: string; afterJson: string }): string {
-  let after: Record<string, unknown> | null = null;
-  try {
-    after = JSON.parse(row.afterJson) as Record<string, unknown>;
-  } catch {
-    after = null;
-  }
+  const after = parseRecord(row.afterJson);
 
   const action = typeof after?.action === 'string' ? after.action : null;
   const result = typeof after?.result === 'string' ? after.result : null;
   const kind = typeof after?.kind === 'string' ? after.kind : null;
   const status = typeof after?.status === 'string' ? after.status : null;
 
-  if (action) return `${row.operation} ${action}`;
-  if (result) return `${row.operation} ${result}`;
-  if (kind) return `${row.operation} ${kind}`;
-  if (status) return `${row.operation} ${status}`;
-  return `${row.operation} ${row.entityTable}`;
+  if (row.entityTable === 'registration_logs') return 'Kit registered';
+  if (row.entityTable === 'installation_logs') return 'Installation recorded';
+  if (row.entityTable === 'verifications') {
+    return result === 'match' ? 'Physical kit verified' : 'Physical verification updated the registry';
+  }
+  if (row.entityTable === 'conflict_reviews' && row.operation === 'transition') {
+    return status === 'dismissed' ? 'Review marked as no action needed' : 'Review marked as reviewed';
+  }
+  if (row.entityTable === 'truck_company_assignments') return 'Serving company updated';
+  if (action) return sentence(action);
+  if (result) return sentence(result);
+  if (kind) return sentence(kind);
+  if (status) return sentence(status);
+  return `${sentence(row.operation)} ${sentence(row.entityTable).toLowerCase()}`;
 }
 
-function listLatestAudit(db: DbClient, orgId: string): LookupCockpitViewModel['audit'] {
+function buildAuditDetail(row: { entityTable: string; afterJson: string }, actorName: string | null): string {
+  const after = parseRecord(row.afterJson);
+  const values = [
+    firstText(after.truckPlate, after.truck, after.truckLabel),
+    firstText(after.motherSerial, after.mother, after.observedMotherSerial),
+    firstText(after.company),
+    firstText(after.reason, after.removalReason),
+  ].filter(Boolean);
+  const context = values.slice(0, 3).join(' / ');
+  return [context, actorName ? `By ${actorName}` : ''].filter(Boolean).join(' - ') || sentence(row.entityTable);
+}
+
+function listLatestAudit(
+  db: DbClient,
+  orgId: string,
+  references: Set<string>,
+): LookupCockpitViewModel['audit'] {
+  if (references.size === 0) return [];
   const rows = db
     .select()
     .from(auditLog)
     .where(eq(auditLog.orgId, orgId))
     .orderBy(desc(auditLog.createdAt))
     .all()
-    .slice(0, 8);
+    .filter((row: { entityId: string; beforeJson: string; afterJson: string }) =>
+      references.has(normalizeReference(row.entityId))
+      || recordMatchesReferences(parseRecord(row.beforeJson), references)
+      || recordMatchesReferences(parseRecord(row.afterJson), references))
+    .slice(0, 20);
 
   return rows.map(
     (row: {
@@ -147,6 +183,7 @@ function listLatestAudit(db: DbClient, orgId: string): LookupCockpitViewModel['a
         entityTable: row.entityTable,
         entityId: row.entityId,
         summary: buildAuditSummary(row),
+        detail: buildAuditDetail(row, actor?.displayName ?? null),
       };
     },
   );
@@ -187,7 +224,7 @@ function buildKit(
 
 function resolveLookupTarget(db: DbClient, query: string, orgId: string) {
   const normalized = normalizeLookupQuery(query);
-  if (!normalized) return { kind: 'unknown' as const, id: null, label: 'No lookup target', mother: null, truckId: null };
+  if (!normalized) return { kind: 'unknown' as const, id: null, label: 'No lookup target', mother: null, truckId: null, truckLabel: null };
 
   const truck =
     db
@@ -221,6 +258,7 @@ function resolveLookupTarget(db: DbClient, query: string, orgId: string) {
       label: truck.plate,
       mother: mother ?? null,
       truckId: truck.id,
+      truckLabel: truck.plate,
     };
   }
 
@@ -237,16 +275,25 @@ function resolveLookupTarget(db: DbClient, query: string, orgId: string) {
       .get();
 
   if (mother) {
+    const assignment = db
+      .select({ truckId: truckAssignments.truckId })
+      .from(truckAssignments)
+      .where(and(eq(truckAssignments.deviceId, mother.id), isNull(truckAssignments.removedAt)))
+      .get();
+    const assignedTruck = assignment
+      ? db.select({ plate: trucks.plate }).from(trucks).where(eq(trucks.id, assignment.truckId)).get()
+      : null;
     return {
       kind: 'mother_device' as const,
       id: mother.id,
       label: mother.serial,
       mother,
-      truckId: null,
+      truckId: assignment?.truckId ?? null,
+      truckLabel: assignedTruck?.plate ?? null,
     };
   }
 
-  return { kind: 'unknown' as const, id: null, label: normalized, mother: null, truckId: null };
+  return { kind: 'unknown' as const, id: null, label: normalized, mother: null, truckId: null, truckLabel: null };
 }
 
 function getCurrentTruckCompany(db: DbClient, truckId: string): { value: TruckCompany | null; declared: boolean } {
@@ -268,6 +315,9 @@ export function getLookupCockpit(db: DbClient, input: LookupCockpitQuery): Looku
         ? getTrustState(db, { motherDeviceId: target.mother.id })
         : emptyTrust();
 
+  const kit = buildKit(db, target.mother, trust);
+  const references = buildLookupReferences(target, kit);
+
   return {
     target: {
       kind: target.kind,
@@ -276,11 +326,62 @@ export function getLookupCockpit(db: DbClient, input: LookupCockpitQuery): Looku
     },
     company: target.kind === 'truck' && target.truckId ? getCurrentTruckCompany(db, target.truckId) : { value: null, declared: false },
     trust,
-    kit: buildKit(db, target.mother, trust),
-    reviews: listOpenConflictReviewsForOrg(db, input.orgId),
+    kit,
+    reviews: listOpenConflictReviewsForTarget(db, input.orgId, references),
     sync: { pendingCount: 0, items: [] },
-    audit: listLatestAudit(db, input.orgId),
+    audit: listLatestAudit(db, input.orgId, references),
   };
+}
+
+function buildLookupReferences(
+  target: ReturnType<typeof resolveLookupTarget>,
+  kit: LookupCockpitViewModel['kit'],
+): Set<string> {
+  if (target.kind === 'unknown') return new Set();
+  return new Set([
+    target.id,
+    target.label,
+    target.truckId,
+    target.truckLabel,
+    kit.mother?.id,
+    kit.mother?.serial,
+    ...kit.subs.flatMap((slot) => [slot.id, slot.serial]),
+  ].filter((value): value is string => Boolean(value)).map(normalizeReference));
+}
+
+function parseRecord(raw: string): Record<string, unknown> {
+  try {
+    const value = JSON.parse(raw);
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function recordMatchesReferences(value: unknown, references: Set<string>): boolean {
+  if (typeof value === 'string' || typeof value === 'number') {
+    return references.has(normalizeReference(String(value)));
+  }
+  if (Array.isArray(value)) return value.some((item) => recordMatchesReferences(item, references));
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).some((item) => recordMatchesReferences(item, references));
+  }
+  return false;
+}
+
+function normalizeReference(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function firstText(...values: unknown[]): string {
+  return values
+    .map((value) => typeof value === 'string' || typeof value === 'number' ? String(value).trim() : '')
+    .find(Boolean) ?? '';
+}
+
+function sentence(value: string): string {
+  const words = value.replaceAll('_', ' ').trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : '';
 }
 
 /**
