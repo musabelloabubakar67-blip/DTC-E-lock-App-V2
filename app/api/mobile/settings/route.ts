@@ -8,6 +8,7 @@ import { listExportSummaries } from '../../../../services/data-management.servic
 import {
   createSettingsUser,
   getSettingsData,
+  resetSettingsUserPassword,
   setSettingsUserActive,
   type CreateSettingsUserInput,
 } from '../../../../services/settings.service';
@@ -66,6 +67,15 @@ export async function POST(request: Request) {
         isActive: body.isActive === true,
       });
       return NextResponse.json({ data: { userId: body.userId, isActive: body.isActive === true } });
+    }
+
+    if (body?.action === 'reset_user_password') {
+      await resetSettingsUserPassword(db, actor, {
+        userId: String(body.userId ?? ''),
+        newPassword: String(body.newPassword ?? ''),
+        confirmPassword: String(body.confirmPassword ?? ''),
+      });
+      return NextResponse.json({ data: { userId: body.userId, reset: true } });
     }
 
     return NextResponse.json(

@@ -396,6 +396,17 @@ class DtcApi(private val context: Context) {
         post("/api/mobile/settings", JSONObject().put("action", "set_user_active").put("userId", userId).put("isActive", active))
     }
 
+    suspend fun resetUserPassword(userId: String, password: String) = withContext(Dispatchers.IO) {
+        post(
+            "/api/mobile/settings",
+            JSONObject()
+                .put("action", "reset_user_password")
+                .put("userId", userId)
+                .put("newPassword", password)
+                .put("confirmPassword", password),
+        )
+    }
+
     suspend fun downloadExport(dataset: String, format: String): String = withContext(Dispatchers.IO) {
         val request = Request.Builder().url("$baseUrl/api/settings/exports?dataset=${dataset.encoded()}&format=${format.encoded()}").get().build()
         client.newCall(request).execute().use { response ->

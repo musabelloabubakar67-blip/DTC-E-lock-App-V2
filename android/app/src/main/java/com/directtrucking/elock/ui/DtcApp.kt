@@ -439,6 +439,12 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         _state.update { it.copy(settings = api.settings(), message = if (active) "User activated" else "User deactivated") }
     }
 
+    fun resetUserPassword(userId: String, password: String, done: () -> Unit) = launchWork {
+        api.resetUserPassword(userId, password)
+        _state.update { it.copy(message = "Password reset. Existing sessions have been revoked.") }
+        done()
+    }
+
     fun exportData(dataset: String, format: String) = launchWork {
         val filename = api.downloadExport(dataset, format)
         _state.update { it.copy(message = "$filename saved to Downloads / DTC E-Lock") }
@@ -502,6 +508,7 @@ fun DtcNativeApp(demo: Boolean = false) {
 }
 
 private val LocalCompactMode = staticCompositionLocalOf { false }
+private val PageEndPadding = 56.dp
 
 @Composable
 private fun LoadingScreen(label: String) {
@@ -571,11 +578,15 @@ private fun NativeWorkspace(state: NativeUiState, model: DtcViewModel) {
         val compactTablet = maxWidth < 700.dp
         if (tablet) {
             val railWidth = if (compactTablet) 80.dp else 176.dp
-            Column(Modifier.fillMaxSize().statusBarsPadding()) {
+            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                 TopBar(state, model::refreshDashboard, railWidth)
                 Row(Modifier.weight(1f)) {
                     TabletRail(state, compactTablet, model::open, model::logout)
-                    ScreenContent(state, model, Modifier.weight(1f))
+                    ScreenContent(
+                        state,
+                        model,
+                        Modifier.weight(1f).padding(start = 10.dp, top = 10.dp, end = 10.dp, bottom = 10.dp),
+                    )
                 }
             }
         } else {
@@ -583,7 +594,13 @@ private fun NativeWorkspace(state: NativeUiState, model: DtcViewModel) {
                 contentWindowInsets = WindowInsets.safeDrawing,
                 topBar = { TopBar(state, model::refreshDashboard) },
                 bottomBar = { PhoneNav(state.selected, model::open) { moreOpen = true } },
-            ) { padding -> ScreenContent(state, model, Modifier.padding(padding)) }
+            ) { padding ->
+                ScreenContent(
+                    state,
+                    model,
+                    Modifier.padding(padding).padding(horizontal = 6.dp, vertical = 6.dp),
+                )
+            }
         }
     }
     if (moreOpen) {
@@ -806,7 +823,7 @@ private fun PageHeader(kicker: String, title: String, accent: String, metric: St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 0.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Fleet operational register", "Fleet", number(data.counts.inServiceMothers), "32%", "${number(data.counts.availableMothers)} mother locks remain available for assignment.") }
         item {
             Surface(
@@ -932,7 +949,7 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "The same registration checks, session retry, ownership controls and archive used on the web app.") }
         item {
             OutlinedButton(onClick = {
@@ -1032,7 +1049,7 @@ private fun RegisterScreen(state: NativeUiState, model: DtcViewModel) {
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var showForm by remember { mutableStateOf(true) }
     LaunchedEffect(query) { delay(350); model.loadRegistry(query) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "Create an unassigned four-lock kit and keep the full registry searchable.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1131,7 +1148,7 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     val message = remember(truck, company, mother, subs) { installMessage(truck, company, mother, subs) }
     val requiredComplete = listOf("configConfirmed", "deviceResponsive", "sublocksResponsive", "overallStatus").all { !checklist[it].isNullOrBlank() }
 
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Truck and kit assignment", "Install", "Truck", if (loadedTruck.isBlank()) "00" else "01", "Load the truck first, confirm the serving company, reuse the same kit or scan a changed kit, then complete the re-check.") }
         item {
             OutlinedButton(onClick = {
@@ -1264,7 +1281,7 @@ private fun InstallScreen(state: NativeUiState, model: DtcViewModel) {
     LaunchedEffect(query) { delay(350); model.loadInstallations(query) }
     LaunchedEffect(shareReady) { if (shareReady) { delay(100); listState.animateScrollToItem(2) } }
 
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Truck and kit assignment", "Install", "Truck", "00", "Record the current truck assignment and configuration check without mixing it with archive history.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1365,7 +1382,7 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
     var notes by remember { mutableStateOf("") }
     var scanDevice by remember { mutableStateOf(false) }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Fault and lifecycle control", "Repair", "Operations", number(state.repairPool.size), "Report field faults and disposition the same repair pool used by the web app.") }
         item {
             OutlinedButton(onClick = { faultOpen = !faultOpen }, Modifier.fillMaxWidth(), shape = RectangleShape) {
@@ -1438,7 +1455,7 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
 @Composable
 private fun LookupScreen(result: LookupSnapshot?, lookup: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", "01", "Search by truck plate or mother-lock serial.") }
         item {
             Column {
@@ -1485,7 +1502,7 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
     var correctionCompany by remember(result?.targetId) { mutableStateOf(result?.company?.lowercase()?.takeIf { result.companyDeclared }.orEmpty()) }
     var correctionNotes by remember(result?.targetId) { mutableStateOf("") }
     var verifyOpen by remember(result?.targetId) { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", if (result?.targetKind == "unknown" || result == null) "00" else "01", "Search a truck plate or mother serial and inspect the complete operational cockpit.") }
         item {
             Panel("Lookup target") {
@@ -1685,7 +1702,7 @@ private fun VerifyKitDialog(
 private fun ReviewScreen(state: NativeUiState, model: DtcViewModel) {
     val canDecide = state.dashboard?.user?.role == "supervisor"
     var selected by remember { mutableStateOf<ReviewItem?>(null) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Exception control", "Open", "Reviews", state.reviews.size.toString().padStart(2, '0'), if (canDecide) "Inspect the complete evidence before resolving or dismissing." else "Review evidence is visible; supervisor authority is required for decisions.") }
         if (state.reviews.isEmpty()) item { EmptyState("No reviews need attention.") }
         items(state.reviews, key = { it.id }) { review ->
@@ -1786,7 +1803,7 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(state: NativeUiState, model: DtcViewModel) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Application control", "System", "Settings", "02", "Appearance and secure profile controls for this Android device.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1849,8 +1866,12 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
     var passwordVisible by remember { mutableStateOf(false) }
     var role by remember { mutableStateOf("installer") }
     var company by remember { mutableStateOf("") }
+    var resetUserId by remember { mutableStateOf<String?>(null) }
+    var resetUserName by remember { mutableStateOf("") }
+    var resetPassword by remember { mutableStateOf("") }
+    var resetPasswordVisible by remember { mutableStateOf(false) }
     val settings = state.settings
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = 28.dp)) {
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Application control", "System", "Settings", if (state.dashboard?.user?.role == "supervisor") "04" else "02", "Profile and appearance for every operator; team access and exports for supervisors.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1884,18 +1905,70 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                     }
                     settings?.users?.forEach { user ->
                         Surface(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                            Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(user.displayName, style = MaterialTheme.typography.titleMedium)
-                                    Text("${user.username} / ${user.role.uppercase()}${user.company?.let { " / ${it.uppercase()}" } ?: ""}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                    Column(Modifier.weight(1f)) {
+                                        Text(user.displayName, style = MaterialTheme.typography.titleMedium)
+                                        Text("${user.username} / ${user.role.uppercase()}${user.company?.let { " / ${it.uppercase()}" } ?: ""}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                    Text(if (user.isActive) "ACTIVE" else "INACTIVE", color = if (user.isActive) SignalGreen else DtcRed, style = MaterialTheme.typography.labelMedium)
+                                    IconButton(
+                                        onClick = {
+                                            if (resetUserId == user.id) {
+                                                resetUserId = null
+                                                resetUserName = ""
+                                                resetPassword = ""
+                                            } else {
+                                                resetUserId = user.id
+                                                resetUserName = user.displayName
+                                                resetPassword = ""
+                                            }
+                                        },
+                                        enabled = !state.working && user.isActive,
+                                    ) {
+                                        Icon(Icons.Outlined.Lock, "Reset password for ${user.displayName}")
+                                    }
+                                    OutlinedButton(
+                                        onClick = { model.setUserActive(user.id, !user.isActive) },
+                                        enabled = !state.working && user.id != settings.currentUserId,
+                                        shape = RectangleShape,
+                                    ) { Text(if (user.isActive) "DEACTIVATE" else "ACTIVATE") }
                                 }
-                                Text(if (user.isActive) "ACTIVE" else "INACTIVE", color = if (user.isActive) SignalGreen else DtcRed, style = MaterialTheme.typography.labelMedium)
-                                Spacer(Modifier.width(8.dp))
-                                OutlinedButton(
-                                    onClick = { model.setUserActive(user.id, !user.isActive) },
-                                    enabled = !state.working && user.id != settings.currentUserId,
-                                    shape = RectangleShape,
-                                ) { Text(if (user.isActive) "DEACTIVATE" else "ACTIVATE") }
+                                if (resetUserId == user.id) {
+                                    Divider()
+                                    Text("RESET PASSWORD / ${resetUserName.uppercase()}", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                                    OutlinedTextField(
+                                        resetPassword,
+                                        { resetPassword = it },
+                                        Modifier.fillMaxWidth(),
+                                        label = { Text("Temporary password (12+ characters)") },
+                                        singleLine = true,
+                                        visualTransformation = if (resetPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                                        trailingIcon = {
+                                            IconButton(onClick = { resetPasswordVisible = !resetPasswordVisible }) {
+                                                Icon(if (resetPasswordVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility, "Toggle password")
+                                            }
+                                        },
+                                    )
+                                    Text(
+                                        "Resetting revokes this user's existing sessions.",
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = SafetyAmber,
+                                    )
+                                    Button(
+                                        onClick = {
+                                            model.resetUserPassword(user.id, resetPassword) {
+                                                resetUserId = null
+                                                resetUserName = ""
+                                                resetPassword = ""
+                                            }
+                                        },
+                                        enabled = !state.working && resetPassword.length >= 12,
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RectangleShape,
+                                        colors = ButtonDefaults.buttonColors(containerColor = DtcRed),
+                                    ) { Text("RESET PASSWORD") }
+                                }
                             }
                         }
                     }
