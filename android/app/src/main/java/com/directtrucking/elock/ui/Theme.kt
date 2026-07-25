@@ -13,35 +13,35 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-val DtcRed = Color(0xFFFF473D)
-val SignalGreen = Color(0xFF8BE3AA)
-val SafetyAmber = Color(0xFFFFB35C)
-val Ink = Color(0xFF0A0C0E)
-val Paper = Color(0xFF0F1113)
-val Panel = Color(0xFF14181B)
-val PanelRaised = Color(0xFF191D20)
-val Rule = Color(0xFF343A40)
-val RuleStrong = Color(0xFF5B646C)
-val IndustrialText = Color(0xFFF1F3EF)
-val IndustrialMuted = Color(0xFFAEB5B8)
+val DtcRed = Color(0xFFFF4D43)
+val SignalGreen = Color(0xFF62DEA0)
+val SafetyAmber = Color(0xFFF4B85A)
+val Ink = Color(0xFF080C0F)
+val Paper = Color(0xFF0B1013)
+val Panel = Color(0xFF12181C)
+val PanelRaised = Color(0xFF192126)
+val Rule = Color(0xFF29343A)
+val RuleStrong = Color(0xFF3C494F)
+val IndustrialText = Color(0xFFF5F7F7)
+val IndustrialMuted = Color(0xFFA4AFB4)
 
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF090909),
-    onPrimary = Color(0xFFEFEFEA),
+    primary = Color(0xFF111A1E),
+    onPrimary = Color(0xFFF8FAF9),
     secondary = DtcRed,
     onSecondary = Color.White,
-    secondaryContainer = Color(0xFF090909),
-    onSecondaryContainer = Color(0xFFEFEFEA),
-    primaryContainer = Color(0xFFE4E4DE),
-    onPrimaryContainer = Color(0xFF090909),
-    background = Color(0xFFEFEFEA),
-    onBackground = Color(0xFF090909),
-    surface = Color(0xFFEFEFEA),
-    onSurface = Color(0xFF090909),
-    surfaceVariant = Color(0xFFE4E4DE),
-    onSurfaceVariant = Color(0xFF62625D),
-    outline = Color(0xFF121212),
-    outlineVariant = Color(0xFF121212),
+    secondaryContainer = Color(0xFFFFE8E5),
+    onSecondaryContainer = Color(0xFF711C17),
+    primaryContainer = Color(0xFFE7ECEA),
+    onPrimaryContainer = Color(0xFF111A1E),
+    background = Color(0xFFF3F5F3),
+    onBackground = Color(0xFF111A1E),
+    surface = Color(0xFFFCFDFC),
+    onSurface = Color(0xFF111A1E),
+    surfaceVariant = Color(0xFFE9EEEB),
+    onSurfaceVariant = Color(0xFF58646A),
+    outline = Color(0xFFD2DAD6),
+    outlineVariant = Color(0xFFE3E8E5),
     error = Color(0xFFB91C1C),
 )
 
@@ -75,21 +75,21 @@ fun DtcTheme(mode: ThemeMode, content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = if (dark) DarkColors else LightColors,
         shapes = Shapes(
-            extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
-            small = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
-            medium = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
-            large = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
-            extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(0.dp),
+            extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(5.dp),
+            small = androidx.compose.foundation.shape.RoundedCornerShape(7.dp),
+            medium = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            large = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         ),
         typography = androidx.compose.material3.Typography(
-            displaySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, fontSize = 52.sp, lineHeight = 46.sp),
-            headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, fontSize = 30.sp, lineHeight = 30.sp),
-            titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, fontSize = 21.sp, lineHeight = 24.sp),
-            titleMedium = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 14.sp, lineHeight = 18.sp),
-            bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 23.sp),
-            bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 20.sp),
-            labelLarge = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 12.sp, lineHeight = 16.sp),
-            labelMedium = TextStyle(fontFamily = FontFamily.Monospace, fontWeight = FontWeight.Bold, fontSize = 11.sp, lineHeight = 15.sp),
+            displaySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Black, fontSize = 40.sp, lineHeight = 44.sp),
+            headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.ExtraBold, fontSize = 30.sp, lineHeight = 34.sp),
+            titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.ExtraBold, fontSize = 22.sp, lineHeight = 28.sp),
+            titleMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 16.sp, lineHeight = 22.sp),
+            bodyLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 16.sp, lineHeight = 24.sp),
+            bodyMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 14.sp, lineHeight = 21.sp),
+            labelLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 13.sp, lineHeight = 18.sp),
+            labelMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.SemiBold, fontSize = 12.sp, lineHeight = 17.sp),
         ),
         content = content,
     )

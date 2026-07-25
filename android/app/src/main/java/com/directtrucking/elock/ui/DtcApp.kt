@@ -3,6 +3,14 @@ package com.directtrucking.elock.ui
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
+import android.view.HapticFeedbackConstants
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -25,43 +33,51 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AddBox
 import androidx.compose.material.icons.outlined.Build
-import androidx.compose.material.icons.outlined.CameraAlt
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.Close
+import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudUpload
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.HomeRepairService
 import androidx.compose.material.icons.outlined.InstallMobile
+import androidx.compose.material.icons.outlined.Inbox
 import androidx.compose.material.icons.outlined.LightMode
 import androidx.compose.material.icons.outlined.ListAlt
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Logout
-import androidx.compose.material.icons.outlined.Menu
 import androidx.compose.material.icons.outlined.MoreHoriz
 import androidx.compose.material.icons.outlined.Person
 import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
+import androidx.compose.material.icons.outlined.SwapVert
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material.icons.outlined.Warning
@@ -72,8 +88,10 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
@@ -82,6 +100,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
@@ -90,6 +109,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.key
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -97,7 +117,11 @@ import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -127,6 +151,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.text.NumberFormat
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 enum class AppScreen(val label: String, val icon: ImageVector) {
     Dashboard("Dashboard", Icons.Outlined.Dashboard),
@@ -232,6 +259,50 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         if (demo) return@launchWork
         val sync = api.syncPending()
         _state.update { it.copy(dashboard = api.bootstrap(), pendingSyncCount = sync.pending, message = if (sync.applied > 0) "Workspace refreshed / ${sync.applied} queued changes synced" else "Workspace refreshed") }
+    }
+
+    fun refreshCurrent() = launchWork {
+        val current = _state.value
+        if (demo) {
+            _state.update { it.copy(message = "${current.selected.label} refreshed in demo mode") }
+            return@launchWork
+        }
+        when (current.selected) {
+            AppScreen.Dashboard -> {
+                val sync = api.syncPending()
+                _state.update {
+                    it.copy(
+                        dashboard = api.bootstrap(),
+                        pendingSyncCount = sync.pending,
+                        message = if (sync.applied > 0) "Workspace refreshed / ${sync.applied} queued changes synced" else "Workspace refreshed",
+                    )
+                }
+            }
+            AppScreen.Register -> {
+                val (items, total) = api.registry()
+                _state.update { it.copy(registry = items, registryTotal = total, registryPage = 0, message = "Registry refreshed") }
+            }
+            AppScreen.Install -> {
+                val (items, total) = api.installationHistory()
+                _state.update { it.copy(installations = items, installationTotal = total, installationPage = 0, message = "Installation history refreshed") }
+            }
+            AppScreen.Repairs -> {
+                _state.update { it.copy(repairPool = api.repairPool(), supervisors = api.supervisors(), message = "Repair pool refreshed") }
+            }
+            AppScreen.Lookup -> {
+                val query = current.lookup?.label?.takeIf(String::isNotBlank)
+                _state.update {
+                    if (query == null) it.copy(message = "Enter a truck or mother lock to refresh its lookup")
+                    else it.copy(lookup = api.lookup(query), message = "Lookup refreshed")
+                }
+            }
+            AppScreen.Review -> {
+                _state.update { it.copy(reviews = api.reviews(), message = "Reviews refreshed") }
+            }
+            AppScreen.Settings -> {
+                _state.update { it.copy(settings = api.settings(), message = "Settings refreshed") }
+            }
+        }
     }
 
     fun loadRegistry(query: String = "", page: Int = 0) = launchWork {
@@ -508,16 +579,25 @@ fun DtcNativeApp(demo: Boolean = false) {
 }
 
 private val LocalCompactMode = staticCompositionLocalOf { false }
-private val PageEndPadding = 56.dp
+private enum class NativeLayout { Phone, CompactTablet, WideTablet }
+private val LocalNativeLayout = staticCompositionLocalOf { NativeLayout.Phone }
+private val PageEndPadding = 88.dp
 
 @Composable
 private fun LoadingScreen(label: String) {
-    Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-        DtcMark()
-        Spacer(Modifier.height(28.dp))
-        CircularProgressIndicator(color = DtcRed)
-        Spacer(Modifier.height(14.dp))
-        Text(label, style = MaterialTheme.typography.labelMedium)
+    Box(Modifier.fillMaxSize()) {
+        Box(Modifier.align(Alignment.TopStart).width(6.dp).fillMaxHeight().background(DtcRed))
+        Column(
+            Modifier.align(Alignment.Center).padding(32.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+        ) {
+            DtcMark()
+            Spacer(Modifier.height(32.dp))
+            CircularProgressIndicator(Modifier.size(28.dp), color = DtcRed, strokeWidth = 3.dp)
+            Spacer(Modifier.height(16.dp))
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
@@ -526,9 +606,10 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
-    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().padding(20.dp)) {
+    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().imePadding().padding(20.dp)) {
         val wide = maxWidth >= 700.dp
         val loginWidth = if (wide) 430.dp else maxWidth
+        Box(Modifier.align(Alignment.TopStart).width(6.dp).fillMaxHeight().background(DtcRed))
         Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
             if (wide) {
                 Column(Modifier.weight(1f).padding(36.dp), verticalArrangement = Arrangement.Center) {
@@ -541,12 +622,20 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
             }
             Surface(
                 modifier = Modifier.width(loginWidth).padding(if (wide) 24.dp else 0.dp),
-                shape = RoundedCornerShape(2.dp),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
-                Column(Modifier.padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(
+                    Modifier.padding(if (wide) 28.dp else 22.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(17.dp),
+                ) {
                     if (!wide) DtcMark()
-                    Text("SECURE ACCESS", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(Modifier.size(7.dp).background(DtcRed, CircleShape))
+                        Spacer(Modifier.width(8.dp))
+                        Text("SECURE ACCESS", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     Text("Sign in", style = MaterialTheme.typography.headlineMedium)
                     OutlinedTextField(username, { username = it }, Modifier.fillMaxWidth(), label = { Text("Username") }, singleLine = true)
                     OutlinedTextField(
@@ -559,7 +648,7 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
                         onClick = { login(username, password) },
                         enabled = username.isNotBlank() && password.isNotBlank() && !working,
                         modifier = Modifier.fillMaxWidth().height(52.dp),
-                        shape = RoundedCornerShape(2.dp),
+                        shape = RoundedCornerShape(7.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = DtcRed),
                     ) { if (working) CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp, color = Color.White) else Text("ENTER WORKSPACE") }
                     Text("Session credentials are encrypted on this device.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -574,39 +663,63 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
 private fun NativeWorkspace(state: NativeUiState, model: DtcViewModel) {
     var moreOpen by remember { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val tablet = maxWidth >= 600.dp || (maxWidth >= 500.dp && maxHeight >= 760.dp)
-        val compactTablet = maxWidth < 700.dp
-        if (tablet) {
-            val railWidth = if (compactTablet) 80.dp else 176.dp
-            Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                TopBar(state, model::refreshDashboard, railWidth)
-                Row(Modifier.weight(1f)) {
-                    TabletRail(state, compactTablet, model::open, model::logout)
+        val layout = when {
+            maxWidth >= 900.dp -> NativeLayout.WideTablet
+            maxWidth >= 600.dp || (maxWidth >= 500.dp && maxHeight >= 760.dp) -> NativeLayout.CompactTablet
+            else -> NativeLayout.Phone
+        }
+        CompositionLocalProvider(LocalNativeLayout provides layout) {
+            if (layout != NativeLayout.Phone) {
+                val compactTablet = layout == NativeLayout.CompactTablet
+                val railWidth = if (compactTablet) 92.dp else 196.dp
+                Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                    TopBar(state, model::refreshDashboard, railWidth)
+                    Row(Modifier.weight(1f)) {
+                        TabletRail(state, compactTablet, model::open, model::logout)
+                        ScreenContent(
+                            state,
+                            model,
+                            Modifier.weight(1f).padding(
+                                start = if (compactTablet) 14.dp else 20.dp,
+                                top = 16.dp,
+                                end = if (compactTablet) 14.dp else 20.dp,
+                                bottom = 14.dp,
+                            ),
+                        )
+                    }
+                }
+            } else {
+                Scaffold(
+                    contentWindowInsets = WindowInsets.safeDrawing,
+                    topBar = { TopBar(state, model::refreshDashboard) },
+                    bottomBar = { PhoneNav(state.selected, model::open) { moreOpen = true } },
+                ) { padding ->
                     ScreenContent(
                         state,
                         model,
-                        Modifier.weight(1f).padding(start = 10.dp, top = 10.dp, end = 10.dp, bottom = 10.dp),
+                        Modifier.padding(padding).padding(horizontal = 12.dp, vertical = 12.dp),
                     )
                 }
-            }
-        } else {
-            Scaffold(
-                contentWindowInsets = WindowInsets.safeDrawing,
-                topBar = { TopBar(state, model::refreshDashboard) },
-                bottomBar = { PhoneNav(state.selected, model::open) { moreOpen = true } },
-            ) { padding ->
-                ScreenContent(
-                    state,
-                    model,
-                    Modifier.padding(padding).padding(horizontal = 6.dp, vertical = 6.dp),
-                )
             }
         }
     }
     if (moreOpen) {
-        ModalBottomSheet(onDismissRequest = { moreOpen = false }, containerColor = MaterialTheme.colorScheme.surface, shape = RectangleShape) {
+        ModalBottomSheet(
+            onDismissRequest = { moreOpen = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp),
+        ) {
             Column(Modifier.fillMaxWidth().navigationBarsPadding().padding(bottom = 12.dp)) {
-                Text("MORE OPERATIONS", Modifier.padding(horizontal = 20.dp, vertical = 10.dp), style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                Row(
+                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text("MORE", style = MaterialTheme.typography.titleLarge)
+                        Text("Additional operations", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    IconButton(onClick = { moreOpen = false }) { Icon(Icons.Outlined.Close, "Close menu") }
+                }
                 listOf(AppScreen.Repairs, AppScreen.Review, AppScreen.Settings).forEach { screen ->
                     NavRow(screen, state.selected == screen) { model.open(screen); moreOpen = false }
                 }
@@ -618,34 +731,82 @@ private fun NativeWorkspace(state: NativeUiState, model: DtcViewModel) {
 @Composable
 private fun TopBar(state: NativeUiState, refresh: () -> Unit, brandWidth: androidx.compose.ui.unit.Dp? = null) {
     val surfaceModifier = if (brandWidth == null) Modifier.statusBarsPadding() else Modifier
-    Surface(surfaceModifier, color = Ink, contentColor = IndustrialText, border = BorderStroke(1.dp, Rule)) {
-        Row(Modifier.fillMaxWidth().height(if (brandWidth == null) 54.dp else 76.dp), verticalAlignment = Alignment.CenterVertically) {
+    Surface(surfaceModifier, color = Ink, contentColor = IndustrialText) {
+        Row(
+            Modifier.fillMaxWidth().height(if (brandWidth == null) 64.dp else 72.dp)
+                .border(width = 1.dp, color = Rule, shape = RectangleShape),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             if (brandWidth != null) {
-                Box(Modifier.width(brandWidth).fillMaxHeight().border(BorderStroke(1.dp, Rule)).padding(10.dp), contentAlignment = Alignment.Center) {
-                    DtcMark(compact = false, light = true)
+                Box(Modifier.width(brandWidth).fillMaxHeight().padding(horizontal = 12.dp), contentAlignment = Alignment.Center) {
+                    DtcMark(compact = brandWidth < 100.dp, light = true)
                 }
             }
             Row(Modifier.weight(1f).fillMaxHeight(), verticalAlignment = Alignment.CenterVertically) {
                 Row(Modifier.weight(1f).fillMaxHeight().padding(horizontal = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text("01", color = DtcRed, style = MaterialTheme.typography.labelMedium)
-                    Spacer(Modifier.width(9.dp))
-                    Text("DTC / E-LOCK CONTROL SYSTEM", style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    if (brandWidth == null) {
+                        DtcMark(compact = true, light = true)
+                    } else {
+                        Box(Modifier.size(8.dp).background(DtcRed, CircleShape))
+                        Spacer(Modifier.width(10.dp))
+                        Column {
+                            Text("E-LOCK CONTROL", style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text("FIELD OPERATIONS", style = MaterialTheme.typography.labelMedium, color = IndustrialMuted)
+                        }
+                    }
                 }
                 if (brandWidth != null) {
-                    if (state.working) CircularProgressIndicator(Modifier.size(16.dp), color = DtcRed, strokeWidth = 2.dp)
-                    IconButton(onClick = refresh, modifier = Modifier.fillMaxHeight().border(BorderStroke(1.dp, Rule))) { Icon(Icons.Outlined.Refresh, "Refresh", Modifier.size(18.dp)) }
-                    Row(Modifier.fillMaxHeight().border(BorderStroke(1.dp, Rule)).padding(horizontal = 13.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Box(Modifier.size(8.dp).background(DtcRed))
-                        Spacer(Modifier.width(8.dp))
-                        Text("ONLINE", style = MaterialTheme.typography.labelMedium)
+                    if (state.working) CircularProgressIndicator(Modifier.size(18.dp), color = DtcRed, strokeWidth = 2.dp)
+                    Surface(
+                        Modifier.padding(horizontal = 8.dp),
+                        color = PanelRaised,
+                        shape = CircleShape,
+                        border = BorderStroke(1.dp, Rule),
+                    ) {
+                        IconButton(onClick = refresh, modifier = Modifier.size(42.dp)) {
+                            Icon(Icons.Outlined.Refresh, "Refresh", Modifier.size(19.dp))
+                        }
                     }
+                    SyncBadge(state.pendingSyncCount)
                 } else if (state.working) {
                     CircularProgressIndicator(Modifier.size(15.dp), color = DtcRed, strokeWidth = 2.dp)
                 }
-                Column(Modifier.fillMaxHeight().padding(horizontal = 13.dp), verticalArrangement = Arrangement.Center) {
-                    Text(state.dashboard?.user?.role?.uppercase().orEmpty(), style = MaterialTheme.typography.labelMedium, maxLines = 1)
-                    Text(state.dashboard?.user?.name?.substringBefore(' ')?.uppercase().orEmpty(), style = MaterialTheme.typography.labelMedium, color = IndustrialMuted, maxLines = 1)
+                if (brandWidth == null && !state.working) {
+                    SyncBadge(state.pendingSyncCount, compact = true)
                 }
+                Column(Modifier.fillMaxHeight().padding(horizontal = if (brandWidth == null) 12.dp else 16.dp), verticalArrangement = Arrangement.Center) {
+                    Text(state.dashboard?.user?.role?.uppercase().orEmpty(), style = MaterialTheme.typography.labelMedium, maxLines = 1)
+                    if (brandWidth != null) {
+                        Text(state.dashboard?.user?.name?.substringBefore(' ').orEmpty(), style = MaterialTheme.typography.bodyMedium, color = IndustrialMuted, maxLines = 1)
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncBadge(count: Int, compact: Boolean = false) {
+    val pending = count > 0
+    val tone = if (pending) SafetyAmber else SignalGreen
+    Surface(
+        color = PanelRaised,
+        shape = RoundedCornerShape(7.dp),
+        border = BorderStroke(1.dp, Rule),
+    ) {
+        Row(
+            Modifier.padding(horizontal = if (compact) 9.dp else 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                if (pending) Icons.Outlined.CloudUpload else Icons.Outlined.CloudDone,
+                if (pending) "$count changes waiting to sync" else "All changes synchronized",
+                Modifier.size(17.dp),
+                tint = tone,
+            )
+            if (!compact) {
+                Spacer(Modifier.width(7.dp))
+                Text(if (pending) "$count QUEUED" else "SYNCED", style = MaterialTheme.typography.labelMedium, color = tone)
             }
         }
     }
@@ -653,65 +814,80 @@ private fun TopBar(state: NativeUiState, refresh: () -> Unit, brandWidth: androi
 
 @Composable
 private fun TabletRail(state: NativeUiState, compact: Boolean, open: (AppScreen) -> Unit, logout: () -> Unit) {
-    Surface(Modifier.width(if (compact) 80.dp else 176.dp).fillMaxHeight(), color = Ink, contentColor = IndustrialText, border = BorderStroke(1.dp, Rule)) {
-        Column(Modifier.fillMaxSize()) {
+    Surface(Modifier.width(if (compact) 92.dp else 184.dp).fillMaxHeight(), color = Ink, contentColor = IndustrialText) {
+        BoxWithConstraints {
+        val short = maxHeight < 560.dp
+        Column(Modifier.fillMaxSize().padding(horizontal = 8.dp, vertical = if (short) 6.dp else 10.dp)) {
             AppScreen.entries.forEach { screen ->
                 if (screen != AppScreen.Review || state.dashboard?.user?.role == "supervisor") {
                     if (compact) {
-                        Box(
-                            Modifier.fillMaxWidth().height(64.dp).clickable { open(screen) }
-                                .background(if (state.selected == screen) Color(0xFF252B30) else Color.Transparent)
-                                .border(BorderStroke(1.dp, Rule)),
-                            contentAlignment = Alignment.Center,
+                        Surface(
+                            Modifier.fillMaxWidth().height(if (short) 54.dp else 66.dp).clickable { open(screen) },
+                            color = if (state.selected == screen) PanelRaised else Color.Transparent,
+                            shape = RoundedCornerShape(8.dp),
+                            border = if (state.selected == screen) BorderStroke(1.dp, RuleStrong) else null,
                         ) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                                Icon(screen.icon, screen.label, Modifier.size(22.dp), tint = if (state.selected == screen) IndustrialText else IndustrialMuted)
+                                Spacer(Modifier.height(10.dp))
+                                Icon(screen.icon, screen.label, Modifier.size(22.dp), tint = if (state.selected == screen) DtcRed else IndustrialMuted)
                                 Text(screen.label.uppercase(), style = MaterialTheme.typography.labelMedium, color = if (state.selected == screen) IndustrialText else IndustrialMuted)
                             }
-                            if (state.selected == screen) Box(Modifier.align(Alignment.CenterStart).width(4.dp).fillMaxHeight().background(DtcRed))
                         }
-                    } else NavRow(screen, state.selected == screen, dark = true) { open(screen) }
+                    } else NavRow(screen, state.selected == screen, dark = true, dense = short) { open(screen) }
+                    Spacer(Modifier.height(if (short) 2.dp else 4.dp))
                 }
             }
             Spacer(Modifier.weight(1f))
-            Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, Rule)).padding(12.dp)) {
-                if (!compact) {
-                    Text("SYSTEM / ONLINE", style = MaterialTheme.typography.labelMedium)
-                    Text("REVISION / 03.0", style = MaterialTheme.typography.labelMedium)
-                    Text("SYNC QUEUE / ${state.pendingSyncCount.toString().padStart(3, '0')}", style = MaterialTheme.typography.labelMedium, color = if (state.pendingSyncCount > 0) SafetyAmber else IndustrialText)
+            if (!compact && !short) {
+                Column(
+                    Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(8.dp))
+                        .border(BorderStroke(1.dp, Rule), RoundedCornerShape(8.dp))
+                        .padding(12.dp),
+                ) {
+                    Text("SYSTEM ONLINE", style = MaterialTheme.typography.labelMedium, color = SignalGreen)
+                    Spacer(Modifier.height(4.dp))
+                    Text("Revision 03.0", style = MaterialTheme.typography.bodyMedium, color = IndustrialMuted)
+                    Text("${state.pendingSyncCount} queued changes", style = MaterialTheme.typography.bodyMedium, color = if (state.pendingSyncCount > 0) SafetyAmber else IndustrialMuted)
                 }
             }
-            Row(Modifier.fillMaxWidth().clickable(onClick = logout).border(BorderStroke(1.dp, Rule)).padding(18.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start) {
+            Spacer(Modifier.height(8.dp))
+            Row(
+                Modifier.fillMaxWidth().clickable(onClick = logout).padding(horizontal = 12.dp, vertical = if (short) 10.dp else 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = if (compact) Arrangement.Center else Arrangement.Start,
+            ) {
                 Icon(Icons.Outlined.Logout, null, Modifier.size(20.dp))
                 if (!compact) { Spacer(Modifier.width(12.dp)); Text("Sign out", style = MaterialTheme.typography.labelLarge) }
             }
+        }
         }
     }
 }
 
 @Composable
-private fun NavRow(screen: AppScreen, active: Boolean, dark: Boolean = false, onClick: () -> Unit) {
+private fun NavRow(screen: AppScreen, active: Boolean, dark: Boolean = false, dense: Boolean = false, onClick: () -> Unit) {
     val activeColor = if (dark) IndustrialText else MaterialTheme.colorScheme.onSurface
     Row(
         Modifier.fillMaxWidth().clickable(onClick = onClick)
-            .background(if (active) Color(0xFF252B30) else Color.Transparent)
-            .border(BorderStroke(1.dp, if (dark) Rule else MaterialTheme.colorScheme.outline))
-            .height(49.dp).padding(horizontal = 13.dp),
+            .background(if (active) PanelRaised else Color.Transparent, RoundedCornerShape(8.dp))
+            .then(if (active) Modifier.border(BorderStroke(1.dp, if (dark) RuleStrong else MaterialTheme.colorScheme.outline), RoundedCornerShape(8.dp)) else Modifier)
+            .height(if (dense) 44.dp else 52.dp).padding(horizontal = 13.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        if (active) Box(Modifier.width(3.dp).height(22.dp).background(DtcRed))
-        if (active) Spacer(Modifier.width(9.dp)) else Spacer(Modifier.width(12.dp))
-        Icon(screen.icon, null, Modifier.size(20.dp), tint = activeColor)
+        Icon(screen.icon, null, Modifier.size(21.dp), tint = if (active) DtcRed else activeColor.copy(alpha = .72f))
         Spacer(Modifier.width(12.dp))
-        Text(screen.label.uppercase(), style = MaterialTheme.typography.labelMedium, color = activeColor)
-        if (active) { Spacer(Modifier.weight(1f)); Text("///", style = MaterialTheme.typography.labelMedium, color = DtcRed) }
+        Text(screen.label, style = MaterialTheme.typography.labelLarge, color = activeColor)
+        if (active) {
+            Spacer(Modifier.weight(1f))
+            Box(Modifier.size(6.dp).background(DtcRed, CircleShape))
+        }
     }
 }
 
 @Composable
 private fun PhoneNav(selected: AppScreen, open: (AppScreen) -> Unit, more: () -> Unit) {
     Surface(color = Ink, contentColor = IndustrialText, border = BorderStroke(1.dp, Rule)) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(66.dp), horizontalArrangement = Arrangement.SpaceAround) {
+        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(76.dp).padding(horizontal = 6.dp, vertical = 5.dp), horizontalArrangement = Arrangement.SpaceAround) {
             listOf(AppScreen.Dashboard, AppScreen.Register, AppScreen.Install, AppScreen.Lookup).forEach { screen ->
                 PhoneNavItem(screen.label, screen.icon, selected == screen) { open(screen) }
             }
@@ -722,33 +898,73 @@ private fun PhoneNav(selected: AppScreen, open: (AppScreen) -> Unit, more: () ->
 
 @Composable
 private fun RowScope.PhoneNavItem(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
-    Column(
+    Box(
         Modifier.weight(1f).fillMaxHeight().clickable(onClick = onClick)
-            .background(if (selected) Color(0xFF252B30) else Ink)
-            .border(BorderStroke(1.dp, Rule)).padding(horizontal = 4.dp, vertical = 7.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+            .padding(horizontal = 2.dp)
+            .background(if (selected) PanelRaised else Color.Transparent, RoundedCornerShape(8.dp)),
     ) {
-        if (selected) Box(Modifier.fillMaxWidth().height(4.dp).background(DtcRed))
-        Spacer(Modifier.height(4.dp))
-        Icon(icon, label, Modifier.size(20.dp), tint = if (selected) IndustrialText else IndustrialMuted)
-        Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = if (selected) IndustrialText else IndustrialMuted)
+        Column(
+            Modifier.align(Alignment.Center),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Icon(icon, label, Modifier.size(22.dp), tint = if (selected) DtcRed else IndustrialMuted)
+            Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = if (selected) IndustrialText else IndustrialMuted)
+        }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: Modifier = Modifier) {
+    val view = LocalView.current
+    LaunchedEffect(state.message) {
+        if (state.message != null) {
+            view.performHapticFeedback(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM
+                else HapticFeedbackConstants.LONG_PRESS,
+            )
+        }
+    }
+    LaunchedEffect(state.error) {
+        if (state.error != null) {
+            view.performHapticFeedback(
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.REJECT
+                else HapticFeedbackConstants.LONG_PRESS,
+            )
+        }
+    }
     Column(modifier.fillMaxSize()) {
         if (state.error != null) StatusStrip(state.error, true, model::clearNotice)
         else if (state.message != null) StatusStrip(state.message, false, model::clearNotice)
         if (state.pendingSyncCount > 0) PendingQueueStrip(state.pendingSyncCount, state.working) { model.syncQueue() }
-        when (state.selected) {
-            AppScreen.Dashboard -> DashboardScreen(state.dashboard!!, model::open)
-            AppScreen.Register -> RegisterParityScreen(state, model)
-            AppScreen.Install -> InstallParityScreen(state, model)
-            AppScreen.Repairs -> RepairsScreen(state, model)
-            AppScreen.Lookup -> LookupParityScreen(state, model)
-            AppScreen.Review -> ReviewScreen(state, model)
-            AppScreen.Settings -> SettingsParityScreen(state, model)
+        AnimatedVisibility(visible = state.working, enter = fadeIn(), exit = fadeOut()) {
+            LinearProgressIndicator(
+                Modifier.fillMaxWidth().height(3.dp),
+                color = DtcRed,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        }
+        PullToRefreshBox(
+            isRefreshing = state.working,
+            onRefresh = model::refreshCurrent,
+            modifier = Modifier.fillMaxSize().weight(1f).imePadding(),
+        ) {
+            Crossfade(
+                targetState = state.selected,
+                animationSpec = tween(durationMillis = 160),
+                label = "native-screen",
+            ) { screen ->
+                when (screen) {
+                    AppScreen.Dashboard -> DashboardScreen(state.dashboard!!, model::open)
+                    AppScreen.Register -> RegisterParityScreen(state, model)
+                    AppScreen.Install -> InstallParityScreen(state, model)
+                    AppScreen.Repairs -> RepairsScreen(state, model)
+                    AppScreen.Lookup -> LookupParityScreen(state, model)
+                    AppScreen.Review -> ReviewScreen(state, model)
+                    AppScreen.Settings -> SettingsParityScreen(state, model)
+                }
+            }
         }
     }
 }
@@ -767,53 +983,104 @@ private fun PendingQueueStrip(count: Int, working: Boolean, retry: () -> Unit) {
 
 @Composable
 private fun StatusStrip(message: String, error: Boolean, close: (() -> Unit)? = null) {
+    val tone = if (error) DtcRed else SignalGreen
     Row(
-        Modifier.fillMaxWidth().background(if (error) DtcRed else SignalGreen).padding(horizontal = 16.dp, vertical = 10.dp),
+        Modifier.fillMaxWidth()
+            .background(tone.copy(alpha = .14f), RoundedCornerShape(6.dp))
+            .border(BorderStroke(1.dp, tone), RoundedCornerShape(6.dp))
+            .semantics { liveRegion = if (error) LiveRegionMode.Assertive else LiveRegionMode.Polite }
+            .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Icon(if (error) Icons.Outlined.ErrorOutline else Icons.Outlined.CheckCircle, null, tint = Color.White)
-        Text(message, Modifier.padding(horizontal = 10.dp).weight(1f), color = Color.White, style = MaterialTheme.typography.labelLarge)
-        if (close != null) IconButton(onClick = close) { Icon(Icons.Outlined.Close, "Dismiss", tint = Color.White) }
+        Icon(if (error) Icons.Outlined.ErrorOutline else Icons.Outlined.CheckCircle, null, tint = tone)
+        Text(message, Modifier.padding(horizontal = 10.dp).weight(1f), color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.bodyMedium)
+        if (close != null) IconButton(onClick = close) { Icon(Icons.Outlined.Close, "Dismiss", tint = tone) }
     }
 }
 
 @Composable
 private fun PageHeader(kicker: String, title: String, accent: String, metric: String, detail: String) {
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-        val titleBlock: @Composable () -> Unit = {
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 18.dp)) {
-                Text("[ ${kicker.uppercase()} ]", style = MaterialTheme.typography.labelMedium)
-                Spacer(Modifier.height(12.dp))
-                Text(title.uppercase(), style = MaterialTheme.typography.displaySmall)
-                if (accent.isNotBlank()) Text(accent.uppercase(), style = MaterialTheme.typography.displaySmall, color = DtcRed)
-            }
-        }
-        val briefBlock: @Composable () -> Unit = {
-            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.Center) {
-                Text(metric, style = MaterialTheme.typography.headlineMedium)
-                Spacer(Modifier.height(8.dp))
-                Text(detail.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
-        if (maxWidth >= 600.dp) {
-            Row(Modifier.fillMaxWidth().height(160.dp).border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline))) {
-                Box(Modifier.weight(1f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) { titleBlock() }
-                Box(Modifier.width(2.dp).fillMaxHeight().background(MaterialTheme.colorScheme.outline))
-                Box(Modifier.weight(.42f).fillMaxHeight(), contentAlignment = Alignment.CenterStart) { briefBlock() }
-            }
-        } else {
-            Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline))) {
-                titleBlock()
-                Divider(color = MaterialTheme.colorScheme.outline)
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+    val tablet = LocalNativeLayout.current != NativeLayout.Phone
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Box {
+            Box(Modifier.align(Alignment.CenterStart).width(5.dp).fillMaxHeight().background(DtcRed))
+            if (tablet) {
+                Row(
+                    Modifier.fillMaxWidth().heightIn(min = 128.dp).padding(start = 24.dp, top = 20.dp, end = 18.dp, bottom = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.Center) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(kicker.uppercase(), style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                            Spacer(Modifier.width(10.dp))
+                            Box(Modifier.width(28.dp).height(1.dp).background(MaterialTheme.colorScheme.outline))
+                        }
+                        Spacer(Modifier.height(9.dp))
+                        Row(verticalAlignment = Alignment.Bottom) {
+                            Text(title, style = MaterialTheme.typography.headlineMedium)
+                            if (accent.isNotBlank()) {
+                                Spacer(Modifier.width(8.dp))
+                                Text(accent, style = MaterialTheme.typography.headlineMedium, color = DtcRed)
+                            }
+                        }
+                        Spacer(Modifier.height(7.dp))
+                        Text(
+                            detail,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 3,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceVariant,
+                        shape = RoundedCornerShape(8.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                    ) {
+                        Column(
+                            Modifier.widthIn(min = 126.dp, max = 158.dp).padding(horizontal = 18.dp, vertical = 15.dp),
+                            verticalArrangement = Arrangement.Center,
+                        ) {
+                            Text("LIVE TOTAL", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Spacer(Modifier.height(3.dp))
+                            Text(metric, style = MaterialTheme.typography.headlineMedium, maxLines = 1)
+                        }
+                    }
+                }
+            } else {
+                Column(Modifier.fillMaxWidth().padding(start = 21.dp, top = 18.dp, end = 16.dp, bottom = 18.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(kicker.uppercase(), style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                        Spacer(Modifier.weight(1f))
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(6.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Text(metric, Modifier.padding(horizontal = 10.dp, vertical = 5.dp), style = MaterialTheme.typography.labelLarge)
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(title, style = MaterialTheme.typography.titleLarge)
+                        if (accent.isNotBlank()) {
+                            Spacer(Modifier.width(7.dp))
+                            Text(accent, style = MaterialTheme.typography.titleLarge, color = DtcRed)
+                        }
+                    }
+                    Spacer(Modifier.height(7.dp))
                     Text(
-                        metric,
-                        Modifier.width(118.dp).padding(14.dp),
-                        style = MaterialTheme.typography.headlineMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Clip,
+                        detail,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis,
                     )
-                    Text(detail.uppercase(), Modifier.weight(1f).padding(14.dp), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }
@@ -823,17 +1090,38 @@ private fun PageHeader(kicker: String, title: String, accent: String, metric: St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Fleet operational register", "Fleet", number(data.counts.inServiceMothers), "32%", "${number(data.counts.availableMothers)} mother locks remain available for assignment.") }
         item {
             Surface(
-                Modifier.fillMaxWidth(), shape = RectangleShape,
-                color = when (data.healthTone) { "danger" -> Color(0xFF2B141D); "warning" -> Color(0xFF2B2218); else -> MaterialTheme.colorScheme.surfaceVariant },
-                border = BorderStroke(1.dp, when (data.healthTone) { "danger" -> DtcRed; "warning" -> SafetyAmber; else -> SignalGreen }),
+                Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(8.dp),
+                color = when (data.healthTone) {
+                    "danger" -> DtcRed.copy(alpha = .12f)
+                    "warning" -> SafetyAmber.copy(alpha = .11f)
+                    else -> SignalGreen.copy(alpha = .09f)
+                },
+                border = BorderStroke(1.dp, when (data.healthTone) { "danger" -> DtcRed.copy(alpha = .72f); "warning" -> SafetyAmber.copy(alpha = .72f); else -> SignalGreen.copy(alpha = .6f) }),
             ) {
-                Row(Modifier.padding(14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (data.healthTone == "ok") Icons.Outlined.Shield else Icons.Outlined.Warning, null, tint = if (data.healthTone == "ok") SignalGreen else DtcRed)
-                    Column(Modifier.padding(start = 14.dp).weight(1f)) { Text(data.healthTitle.uppercase(), style = MaterialTheme.typography.titleMedium); Text(data.healthDetail.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(
+                        Modifier.size(42.dp),
+                        color = MaterialTheme.colorScheme.surface.copy(alpha = .72f),
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                if (data.healthTone == "ok") Icons.Outlined.Shield else Icons.Outlined.Warning,
+                                null,
+                                Modifier.size(22.dp),
+                                tint = if (data.healthTone == "ok") SignalGreen else if (data.healthTone == "warning") SafetyAmber else DtcRed,
+                            )
+                        }
+                    }
+                    Column(Modifier.padding(start = 13.dp).weight(1f)) {
+                        Text(data.healthTitle, style = MaterialTheme.typography.titleMedium)
+                        Text(data.healthDetail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                     if (data.counts.openReviews > 0) IconButton(onClick = { open(AppScreen.Review) }) { Icon(Icons.Outlined.ChevronRight, "Open reviews") }
                 }
             }
@@ -848,9 +1136,9 @@ private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) 
                     MetricData("Available mothers", data.counts.availableMothers, Icons.Outlined.Lock, null),
                 )
                 val columns = if (maxWidth >= 900.dp) 5 else if (maxWidth >= 600.dp) 3 else 2
-                Column {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     metrics.chunked(columns).forEach { row ->
-                        Row(Modifier.fillMaxWidth()) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                             row.forEach { item -> Metric(item.label, item.value, item.icon, item.accent, Modifier.weight(1f)) }
                             repeat(columns - row.size) { Spacer(Modifier.weight(1f)) }
                         }
@@ -860,12 +1148,19 @@ private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) 
         }
         item {
             Panel("Quick operations") {
-                Row(Modifier.fillMaxWidth()) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     listOf(AppScreen.Lookup, AppScreen.Register, AppScreen.Install, AppScreen.Review).forEach { screen ->
-                        Column(Modifier.weight(1f).height(70.dp).clickable { open(screen) }.border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                            Icon(screen.icon, null, Modifier.size(23.dp))
-                            Spacer(Modifier.height(5.dp))
-                            Text(screen.label.uppercase(), style = MaterialTheme.typography.labelMedium)
+                        Surface(
+                            Modifier.weight(1f).height(78.dp).clickable { open(screen) },
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            shape = RoundedCornerShape(8.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
+                                Icon(screen.icon, null, Modifier.size(23.dp), tint = DtcRed)
+                                Spacer(Modifier.height(7.dp))
+                                Text(screen.label.uppercase(), style = MaterialTheme.typography.labelMedium)
+                            }
                         }
                     }
                 }
@@ -889,11 +1184,28 @@ private data class MetricData(val label: String, val value: Int, val icon: Image
 
 @Composable
 private fun Metric(label: String, value: Int, icon: ImageVector, accent: Color? = null, modifier: Modifier = Modifier) {
-    Surface(modifier.height(112.dp), shape = RectangleShape, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-        Column(Modifier.padding(14.dp)) {
-            Icon(icon, null, tint = accent ?: MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(22.dp))
+    Surface(
+        modifier.height(124.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.SpaceBetween) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Surface(
+                    Modifier.size(34.dp),
+                    color = (accent ?: MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = .12f),
+                    shape = RoundedCornerShape(7.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(icon, null, tint = accent ?: MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(19.dp))
+                    }
+                }
+                Spacer(Modifier.weight(1f))
+                Box(Modifier.size(6.dp).background(accent ?: MaterialTheme.colorScheme.outline, CircleShape))
+            }
             Text(number(value), style = MaterialTheme.typography.headlineMedium)
-            Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -909,9 +1221,15 @@ private fun TrustPanel(data: DashboardSnapshot, modifier: Modifier = Modifier) =
 @Composable
 private fun FeedPanel(title: String, feed: List<com.directtrucking.elock.core.FeedItem>, modifier: Modifier = Modifier) = Panel(title, modifier) {
     if (feed.isEmpty()) Text("No current items.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-    feed.take(5).forEach { item ->
-        Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) { Text(item.title.replace('_', ' '), style = MaterialTheme.typography.labelLarge); Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        Divider()
+    feed.take(8).forEachIndexed { index, item ->
+        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.Top) {
+            Box(Modifier.padding(top = 6.dp).size(8.dp).background(if (index == 0) DtcRed else MaterialTheme.colorScheme.outline, CircleShape))
+            Column(Modifier.padding(start = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                Text(item.title.replace('_', ' '), style = MaterialTheme.typography.titleMedium)
+                Text(item.detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        if (index < feed.take(8).lastIndex) Divider(color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 
@@ -938,8 +1256,21 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
     var archiveOpen by remember { mutableStateOf(false) }
     var formOpen by remember { mutableStateOf(true) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
+    var scanError by remember { mutableStateOf<String?>(null) }
+    var ownershipFilter by remember { mutableStateOf("all") }
+    var registryAscending by remember { mutableStateOf(true) }
+    var expandedRegistry by remember { mutableStateOf(setOf<String>()) }
 
-    LaunchedEffect(query) { delay(350); model.loadRegistry(query, 0) }
+    val effectiveRegistryQuery = remember(query, ownershipFilter) {
+        listOf(query.trim(), ownershipFilter.takeUnless { it == "all" }.orEmpty()).filter(String::isNotBlank).joinToString(" ")
+    }
+    LaunchedEffect(effectiveRegistryQuery) { delay(350); model.loadRegistry(effectiveRegistryQuery, 0) }
+    val duplicateSerials = duplicateLockSerials(mother, subs)
+    val visibleRegistry = remember(state.registry, ownershipFilter, registryAscending) {
+        state.registry
+            .filter { ownershipFilter == "all" || it.ownership == ownershipFilter }
+            .let { items -> if (registryAscending) items.sortedBy { it.mother } else items.sortedByDescending { it.mother } }
+    }
 
     fun submit(entry: RegistrationSessionRow) {
         session = listOf(entry) + session.filterNot { it.id == entry.id }
@@ -949,20 +1280,28 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
         }
     }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "The same registration checks, session retry, ownership controls and archive used on the web app.") }
         item {
-            OutlinedButton(onClick = {
-                formOpen = !formOpen
-                if (formOpen) archiveOpen = false
-            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                Icon(if (formOpen) Icons.Outlined.Close else Icons.Outlined.AddBox, null); Spacer(Modifier.width(8.dp)); Text(if (formOpen) "COLLAPSE REGISTRATION FORM" else "NEW REGISTRATION")
-            }
+            WorkspaceModeSwitch(
+                primaryLabel = "Registration",
+                primaryIcon = Icons.Outlined.AddBox,
+                secondaryLabel = "Registered kits",
+                secondaryIcon = Icons.Outlined.ListAlt,
+                secondaryCount = state.registryTotal,
+                primarySelected = formOpen,
+                selectPrimary = { formOpen = true; archiveOpen = false },
+                selectSecondary = { archiveOpen = true; formOpen = false },
+            )
         }
         if (formOpen) item {
             Panel("New kit") {
+                scanError?.let { StatusStrip(it, true) { scanError = null } }
                 ScanField("Mother lock", mother, { mother = it }) { scanTarget = 0 }
                 subs.forEachIndexed { index, value -> ScanField("Sub-lock ${listOf("B", "C", "D")[index]}", value, { updated -> subs = subs.toMutableList().also { it[index] = updated } }) { scanTarget = index + 1 } }
+                if (duplicateSerials.isNotEmpty()) {
+                    StatusStrip("Each lock must be unique. Repeated serial: ${duplicateSerials.first()}", true)
+                }
                 OutlinedTextField(sim, { sim = it }, Modifier.fillMaxWidth(), label = { Text("SIM number") }, singleLine = true)
                 Text("CONFIGURATION CHECKS", style = MaterialTheme.typography.labelMedium)
                 listOf("ipConfigured" to "IP configured", "apnConfigured" to "APN configured", "apnAuthSet" to "APN authentication", "btWriteDone" to "Bluetooth write").forEach { (key, label) ->
@@ -970,12 +1309,12 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
                 Button(
                     onClick = { submit(RegistrationSessionRow(System.nanoTime(), mother, subs, sim, config, "PENDING")) },
-                    enabled = !state.working && mother.isNotBlank() && subs.all(String::isNotBlank) && sim.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth().height(50.dp), shape = RectangleShape,
+                    enabled = !state.working && mother.isNotBlank() && subs.all(String::isNotBlank) && duplicateSerials.isEmpty() && sim.isNotBlank(),
+                    modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
                 ) { Text("REGISTER KIT") }
             }
         }
-        item {
+        if (formOpen) item {
             Panel("Session summary / ${session.size}") {
                 if (session.isEmpty()) Text("No kits submitted in this session.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 session.forEach { row ->
@@ -986,41 +1325,60 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
             }
         }
-        item {
-            OutlinedButton(onClick = {
-                archiveOpen = !archiveOpen
-                if (archiveOpen) formOpen = false
-            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                Icon(Icons.Outlined.ListAlt, null); Spacer(Modifier.width(8.dp)); Text(if (archiveOpen) "CLOSE REGISTERED KITS" else "OPEN REGISTERED KITS (${state.registryTotal})")
-            }
-        }
         if (archiveOpen) item {
             Panel("Registered kits / ${number(state.registryTotal)}") {
                 SearchField(query, { query = it }, "Search serial, SIM or installer")
+                RegistryArchiveControls(ownershipFilter, { ownershipFilter = it }, registryAscending) { registryAscending = !registryAscending }
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(onClick = { selected = state.registry.map { it.id }.toSet() }, shape = RectangleShape) { Text("SELECT VISIBLE") }
-                    OutlinedButton(onClick = { selected = emptySet() }, enabled = selected.isNotEmpty(), shape = RectangleShape) { Text("CLEAR") }
+                    OutlinedButton(onClick = { selected = visibleRegistry.map { it.id }.toSet() }, shape = RoundedCornerShape(7.dp)) { Text("SELECT VISIBLE") }
+                    OutlinedButton(onClick = { selected = emptySet() }, enabled = selected.isNotEmpty(), shape = RoundedCornerShape(7.dp)) { Text("CLEAR") }
                 }
                 if (selected.isNotEmpty()) {
                     OutlinedTextField(releaseNote, { releaseNote = it }, Modifier.fillMaxWidth(), label = { Text("Company, handover reference or reason") }, minLines = 2)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { model.setRegistryOwnership(selected.toList(), "released_external", releaseNote, query); selected = emptySet(); releaseNote = "" }, shape = RectangleShape, colors = ButtonDefaults.buttonColors(containerColor = DtcRed)) { Text("RELEASE ${selected.size}") }
-                        OutlinedButton(onClick = { model.setRegistryOwnership(selected.toList(), "owned", releaseNote, query); selected = emptySet(); releaseNote = "" }, shape = RectangleShape) { Text("RESTORE ${selected.size}") }
+                        Button(onClick = { model.setRegistryOwnership(selected.toList(), "released_external", releaseNote, effectiveRegistryQuery); selected = emptySet(); releaseNote = "" }, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = DtcRed)) { Text("RELEASE ${selected.size}") }
+                        OutlinedButton(onClick = { model.setRegistryOwnership(selected.toList(), "owned", releaseNote, effectiveRegistryQuery); selected = emptySet(); releaseNote = "" }, shape = RoundedCornerShape(7.dp)) { Text("RESTORE ${selected.size}") }
                     }
                 }
-                if (state.registry.isEmpty()) EmptyState("No kits match this search.")
-                state.registry.forEach { item ->
-                    Surface(Modifier.fillMaxWidth().clickable { selected = if (item.id in selected) selected - item.id else selected + item.id }, color = if (item.id in selected) MaterialTheme.colorScheme.surfaceVariant else MaterialTheme.colorScheme.surface, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                        Column(Modifier.padding(12.dp)) {
-                            ArchiveItemHeader(
-                                if (item.id in selected) "[X] ${item.mother}" else "[ ] ${item.mother}",
-                                item.ownership.replace('_', ' '),
-                                if (item.ownership == "owned") SignalGreen else DtcRed,
+                if (visibleRegistry.isEmpty()) EmptyState("No kits match these filters.")
+                visibleRegistry.forEach { item ->
+                    key(item.id) {
+                    Surface(
+                        Modifier.fillMaxWidth().clickable { selected = if (item.id in selected) selected - item.id else selected + item.id },
+                        shape = RoundedCornerShape(8.dp),
+                        color = if (item.id in selected) DtcRed.copy(alpha = .08f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .34f),
+                        border = BorderStroke(1.dp, if (item.id in selected) DtcRed.copy(alpha = .7f) else MaterialTheme.colorScheme.outline),
+                    ) {
+                        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.Top) {
+                            Icon(
+                                if (item.id in selected) Icons.Outlined.CheckCircle else Icons.Outlined.RadioButtonUnchecked,
+                                if (item.id in selected) "Selected" else "Not selected",
+                                Modifier.padding(top = 2.dp).size(22.dp),
+                                tint = if (item.id in selected) DtcRed else MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
-                            Text("SIM ${item.sim} / ${item.actor}", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            item.ownershipNotes?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                            Column(Modifier.padding(start = 10.dp).weight(1f)) {
+                                ArchiveItemHeader(
+                                    item.mother,
+                                    item.ownership.replace('_', ' '),
+                                    if (item.ownership == "owned") SignalGreen else DtcRed,
+                                )
+                                item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
+                                Text("SIM ${item.sim} / ${item.actor}", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                item.ownershipNotes?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                                TextButton(onClick = {
+                                    expandedRegistry = if (item.id in expandedRegistry) expandedRegistry - item.id else expandedRegistry + item.id
+                                }) {
+                                    Text(if (item.id in expandedRegistry) "LESS DETAILS" else "MORE DETAILS")
+                                }
+                                if (item.id in expandedRegistry) {
+                                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    ValueLine("Registered", formatInstallationTimestamp(item.loggedDate))
+                                    ValueLine("Source", item.source)
+                                    ValueLine("Record reference", item.id)
+                                }
+                            }
                         }
+                    }
                     }
                 }
                 ArchivePager(
@@ -1028,15 +1386,34 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
                     pages = maxOf(1, (state.registryTotal + 7) / 8),
                     previousEnabled = state.registryPage > 0,
                     nextEnabled = (state.registryPage + 1) * 8 < state.registryTotal,
-                    previous = { model.loadRegistry(query, state.registryPage - 1) },
-                    next = { model.loadRegistry(query, state.registryPage + 1) },
+                    previous = { model.loadRegistry(effectiveRegistryQuery, state.registryPage - 1) },
+                    next = { model.loadRegistry(effectiveRegistryQuery, state.registryPage + 1) },
                 )
             }
         }
     }
     scanTarget?.let { target ->
         val label = if (target == 0) "mother lock" else "sub-lock ${listOf("B", "C", "D")[target - 1]}"
-        ScannerDialog(label, onScanned = { value -> if (target == 0) mother = value else subs = subs.toMutableList().also { it[target - 1] = value }; scanTarget = null }, onDismiss = { scanTarget = null })
+        key(target) {
+            ScannerDialog(
+                label,
+                onScanned = { value ->
+                    val existing = buildList {
+                        if (target != 0) add(mother)
+                        subs.forEachIndexed { index, serial -> if (target != index + 1) add(serial) }
+                    }.filter(String::isNotBlank)
+                    if (existing.any { it.equals(value, ignoreCase = true) }) {
+                        scanError = "$value is already used in this kit."
+                        scanTarget = null
+                    } else {
+                        scanError = null
+                        if (target == 0) mother = value else subs = subs.toMutableList().also { it[target - 1] = value }
+                        scanTarget = if (target < 3) target + 1 else null
+                    }
+                },
+                onDismiss = { scanTarget = null },
+            )
+        }
     }
 }
 
@@ -1049,7 +1426,7 @@ private fun RegisterScreen(state: NativeUiState, model: DtcViewModel) {
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var showForm by remember { mutableStateOf(true) }
     LaunchedEffect(query) { delay(350); model.loadRegistry(query) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "Create an unassigned four-lock kit and keep the full registry searchable.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1060,7 +1437,7 @@ private fun RegisterScreen(state: NativeUiState, model: DtcViewModel) {
                     }, Modifier.weight(.8f))
                     RegistryArchive(state, query, { query = it }, Modifier.weight(1.2f))
                 } else Column {
-                    OutlinedButton(onClick = { showForm = !showForm }, Modifier.fillMaxWidth(), shape = RectangleShape) { Icon(if (showForm) Icons.Outlined.Close else Icons.Outlined.AddBox, null); Spacer(Modifier.width(8.dp)); Text(if (showForm) "COLLAPSE REGISTRATION FORM" else "NEW REGISTRATION") }
+                    OutlinedButton(onClick = { showForm = !showForm }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(7.dp)) { Icon(if (showForm) Icons.Outlined.Close else Icons.Outlined.AddBox, null); Spacer(Modifier.width(8.dp)); Text(if (showForm) "COLLAPSE REGISTRATION FORM" else "NEW REGISTRATION") }
                     if (showForm) RegisterForm(mother, { mother = it }, subs, { i, value -> subs = subs.toMutableList().also { it[i] = value } }, sim, { sim = it }, { scanTarget = it }, state.working, {
                         model.register(mother, subs, sim) { mother = ""; subs = listOf("", "", ""); sim = "" }
                     })
@@ -1085,7 +1462,7 @@ private fun RegisterForm(
     OutlinedTextField(sim, setSim, Modifier.fillMaxWidth(), label = { Text("SIM number") }, singleLine = true)
     Button(
         onClick = submit, enabled = !working && mother.isNotBlank() && subs.all(String::isNotBlank) && sim.isNotBlank(),
-        modifier = Modifier.fillMaxWidth().height(50.dp), shape = RectangleShape,
+        modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
     ) { Text("REGISTER KIT") }
 }
 
@@ -1119,10 +1496,23 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     var archiveOpen by remember { mutableStateOf(false) }
     var workbenchOpen by remember { mutableStateOf(true) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
+    var scanError by remember { mutableStateOf<String?>(null) }
     var shareReady by remember { mutableStateOf(false) }
+    var historyFilter by remember { mutableStateOf("all") }
+    var historyNewestFirst by remember { mutableStateOf(true) }
+    var expandedInstallations by remember { mutableStateOf(setOf<String>()) }
     val listState = rememberLazyListState()
 
-    LaunchedEffect(query) { delay(350); model.loadInstallations(query, 0) }
+    val effectiveHistoryQuery = remember(query, historyFilter) {
+        val statusTerm = when (historyFilter) {
+            "successful" -> "successful"
+            "issues" -> "completed_with_issues"
+            "failed" -> "failed"
+            else -> ""
+        }
+        listOf(query.trim(), statusTerm).filter(String::isNotBlank).joinToString(" ")
+    }
+    LaunchedEffect(effectiveHistoryQuery) { delay(350); model.loadInstallations(effectiveHistoryQuery, 0) }
     LaunchedEffect(state.lookup) {
         val loaded = state.lookup
         if (loaded != null && loaded.targetKind == "truck" && loaded.label.equals(truck, ignoreCase = true)) {
@@ -1147,24 +1537,49 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     }
     val message = remember(truck, company, mother, subs) { installMessage(truck, company, mother, subs) }
     val requiredComplete = listOf("configConfirmed", "deviceResponsive", "sublocksResponsive", "overallStatus").all { !checklist[it].isNullOrBlank() }
+    val kitComplete = mother.isNotBlank() && subs.all(String::isNotBlank)
+    val duplicateSerials = duplicateLockSerials(mother, subs)
+    val installStep = when {
+        loadedTruck.isBlank() -> 0
+        company.isBlank() || !kitComplete || duplicateSerials.isNotEmpty() -> 1
+        !requiredComplete -> 2
+        else -> 3
+    }
+    val visibleInstallations = remember(state.installations, historyFilter, historyNewestFirst) {
+        state.installations
+            .filter { item ->
+                when (historyFilter) {
+                    "successful" -> item.status == "successful"
+                    "issues" -> item.status == "completed_with_issues"
+                    "failed" -> item.status == "failed"
+                    else -> true
+                }
+            }
+            .let { items -> if (historyNewestFirst) items.sortedByDescending { it.loggedDate } else items.sortedBy { it.loggedDate } }
+    }
 
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Truck and kit assignment", "Install", "Truck", if (loadedTruck.isBlank()) "00" else "01", "Load the truck first, confirm the serving company, reuse the same kit or scan a changed kit, then complete the re-check.") }
         item {
-            OutlinedButton(onClick = {
-                workbenchOpen = !workbenchOpen
-                if (workbenchOpen) archiveOpen = false
-            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                Icon(if (workbenchOpen) Icons.Outlined.Close else Icons.Outlined.AddBox, null)
-                Spacer(Modifier.width(8.dp))
-                Text(if (workbenchOpen) "COLLAPSE INSTALLATION FORM" else "NEW INSTALLATION")
-            }
+            WorkspaceModeSwitch(
+                primaryLabel = "Installation",
+                primaryIcon = Icons.Outlined.Build,
+                secondaryLabel = "History",
+                secondaryIcon = Icons.Outlined.ListAlt,
+                secondaryCount = state.installationTotal,
+                primarySelected = workbenchOpen,
+                selectPrimary = { workbenchOpen = true; archiveOpen = false },
+                selectSecondary = { archiveOpen = true; workbenchOpen = false },
+            )
+        }
+        if (workbenchOpen) item {
+            InstallationProgress(installStep)
         }
         if (workbenchOpen) {
         item {
             Panel("Truck assignment") {
                 OutlinedTextField(truck, { truck = it.uppercase(); loadedTruck = "" }, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
-                Button(onClick = { model.lookup(truck) }, enabled = truck.isNotBlank() && !state.working, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RectangleShape) { Text("LOAD TRUCK KIT") }
+                Button(onClick = { model.lookup(truck) }, enabled = truck.isNotBlank() && !state.working, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp)) { Text("LOAD TRUCK KIT") }
                 if (loadedTruck.isBlank()) Text("Load the truck before submitting this installation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 else {
                     ValueLine("Truck", loadedTruck)
@@ -1173,21 +1588,25 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
                 Text("SERVING COMPANY", style = MaterialTheme.typography.labelMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("mrs" to "MRS", "dangote" to "Dangote").forEach { (value, label) -> FilterChip(company == value, { company = value }, { Text(label) }) }
+                    listOf("mrs" to "MRS", "dangote" to "Dangote").forEach { (value, label) -> SelectionChip(company == value, { company = value }, label) }
                 }
                 if (loadedTruck.isNotBlank() && state.lookup?.mother != null) {
                     Text("INSTALL MODE", style = MaterialTheme.typography.labelMedium)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(mode == "same_kit", { mode = "same_kit"; mother = state.lookup?.mother.orEmpty(); subs = state.lookup?.subs?.map { it.second.orEmpty() } ?: subs }, { Text("Same kit") })
-                        FilterChip(mode == "changed", { mode = "changed"; mother = ""; subs = listOf("", "", "") }, { Text("Kit changed") })
+                        SelectionChip(mode == "same_kit", { mode = "same_kit"; mother = state.lookup?.mother.orEmpty(); subs = state.lookup?.subs?.map { it.second.orEmpty() } ?: subs }, "Same kit")
+                        SelectionChip(mode == "changed", { mode = "changed"; mother = ""; subs = listOf("", "", "") }, "Kit changed")
                     }
                 }
                 if (mode == "same_kit") {
                     ValueLine("Mother lock", mother)
                     subs.forEachIndexed { index, serial -> ValueLine("Sub-lock ${listOf("B", "C", "D")[index]}", serial) }
                 } else {
+                    scanError?.let { StatusStrip(it, true) { scanError = null } }
                     ScanField("Mother lock", mother, { mother = it }) { scanTarget = 0 }
                     subs.forEachIndexed { index, value -> ScanField("Sub-lock ${listOf("B", "C", "D")[index]}", value, { updated -> subs = subs.toMutableList().also { it[index] = updated } }) { scanTarget = index + 1 } }
+                    if (duplicateSerials.isNotEmpty()) {
+                        StatusStrip("Each lock must be unique. Repeated serial: ${duplicateSerials.first()}", true)
+                    }
                 }
             }
         }
@@ -1197,21 +1616,12 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                 ChoiceLine("Sub-locks responsive", checklist["sublocksResponsive"].orEmpty(), listOf("yes" to "Yes", "no" to "No")) { checklist = checklist + ("sublocksResponsive" to it) }
                 ChoiceLine("Configuration confirmed", checklist["configConfirmed"].orEmpty(), listOf("yes" to "Yes", "changed" to "Changed", "no" to "No")) { checklist = checklist + ("configConfirmed" to it) }
                 ChoiceLine("Overall status", checklist["overallStatus"].orEmpty(), listOf("successful" to "Successful", "completed_with_issues" to "With issues", "failed" to "Failed")) { checklist = checklist + ("overallStatus" to it) }
-                Divider()
-                ChoiceLine("Battery", checklist["batteryLevel"].orEmpty(), listOf("full" to "Full", "adequate" to "Adequate", "low" to "Low", "dead" to "Dead")) { checklist = checklist + ("batteryLevel" to it) }
-                ChoiceLine("Physical damage", checklist["physicalDamage"].orEmpty(), listOf("none" to "None", "minor" to "Minor", "significant" to "Significant")) { checklist = checklist + ("physicalDamage" to it) }
-                ChoiceLine("Bluetooth unlock", checklist["btUnlockDone"].orEmpty(), listOf("yes" to "Yes", "no" to "No")) { checklist = checklist + ("btUnlockDone" to it) }
-                ChoiceLine("Online after install", checklist["onlineAfter"].orEmpty(), listOf("yes" to "Yes", "intermittent" to "Intermittent", "no" to "No")) { checklist = checklist + ("onlineAfter" to it) }
-                ChoiceLine("Mother locked", checklist["motherLocked"].orEmpty(), listOf("yes" to "Yes", "no" to "No")) { checklist = checklist + ("motherLocked" to it) }
-                ChoiceLine("Mother secured", checklist["motherSecured"].orEmpty(), listOf("yes" to "Yes", "no" to "No")) { checklist = checklist + ("motherSecured" to it) }
-                ChoiceLine("Sub-locks locked", checklist["sublocksLocked"].orEmpty(), listOf("all" to "All", "partial" to "Partial", "none" to "None")) { checklist = checklist + ("sublocksLocked" to it) }
-                ChoiceLine("Sub-locks secured", checklist["sublocksSecured"].orEmpty(), listOf("yes" to "Yes", "no" to "No")) { checklist = checklist + ("sublocksSecured" to it) }
                 OutlinedTextField(checklist["configNotes"].orEmpty(), { checklist = checklist + ("configNotes" to it) }, Modifier.fillMaxWidth(), label = { Text("Configuration notes") }, minLines = 2)
                 OutlinedTextField(checklist["issuesNotes"].orEmpty(), { checklist = checklist + ("issuesNotes" to it) }, Modifier.fillMaxWidth(), label = { Text("Issues and follow-up notes") }, minLines = 2)
                 Button(
                     onClick = { model.installBySerials(truck, company, mother, subs, mode, checklist) { shareReady = true } },
-                    enabled = !state.working && loadedTruck.isNotBlank() && company.isNotBlank() && mother.isNotBlank() && subs.all(String::isNotBlank) && requiredComplete,
-                    modifier = Modifier.fillMaxWidth().height(52.dp), shape = RectangleShape,
+                    enabled = !state.working && loadedTruck.isNotBlank() && company.isNotBlank() && kitComplete && duplicateSerials.isEmpty() && requiredComplete,
+                    modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(7.dp),
                 ) { Text("RECORD INSTALLATION") }
                 if (!requiredComplete) Text("Device, sub-lock, configuration and overall status checks are required.", color = SafetyAmber)
             }
@@ -1220,31 +1630,42 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
             Panel("Send installation report") {
                 Text(message, style = MaterialTheme.typography.labelLarge)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { openWhatsApp(context, message); shareReady = false }, shape = RectangleShape, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12351F), contentColor = SignalGreen)) { Text("SEND TO WHATSAPP") }
-                    OutlinedButton(onClick = { shareReady = false }, shape = RectangleShape) { Text("DISMISS") }
+                    Button(onClick = { openWhatsApp(context, message); shareReady = false }, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12351F), contentColor = SignalGreen)) { Text("SEND TO WHATSAPP") }
+                    OutlinedButton(onClick = { shareReady = false }, shape = RoundedCornerShape(7.dp)) { Text("DISMISS") }
                 }
             }
         }
         }
-        item {
-            OutlinedButton(onClick = {
-                archiveOpen = !archiveOpen
-                if (archiveOpen) workbenchOpen = false
-            }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                Icon(Icons.Outlined.ListAlt, null); Spacer(Modifier.width(8.dp)); Text(if (archiveOpen) "CLOSE INSTALLATION HISTORY" else "OPEN INSTALLATION HISTORY (${state.installationTotal})")
-            }
-        }
         if (archiveOpen) item {
             Panel("Installation history / ${number(state.installationTotal)}") {
                 SearchField(query, { query = it }, "Search truck, lock, status or installer")
-                if (state.installations.isEmpty()) EmptyState("No installation events match this search.")
-                state.installations.forEach { item ->
-                    Surface(Modifier.fillMaxWidth(), border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
-                        Column(Modifier.padding(12.dp)) {
-                            ArchiveItemHeader(item.truck, item.status.replace('_', ' '), if (item.status == "failed") DtcRed else SignalGreen)
-                            Text("Mother  ${item.mother}")
-                            item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
-                            Text(item.actor, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                InstallationArchiveControls(historyFilter, { historyFilter = it }, historyNewestFirst) { historyNewestFirst = !historyNewestFirst }
+                if (visibleInstallations.isEmpty()) EmptyState("No installation events match these filters.")
+                visibleInstallations.forEach { item ->
+                    key(item.id.ifBlank { "${item.truck}-${item.loggedDate}" }) {
+                        val itemKey = item.id.ifBlank { "${item.truck}-${item.loggedDate}" }
+                        Surface(
+                            Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(8.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = .34f),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                        ) {
+                            Column(Modifier.padding(13.dp)) {
+                                ArchiveItemHeader(item.truck, item.status.replace('_', ' '), if (item.status == "failed") DtcRed else SignalGreen)
+                                Text("Mother  ${item.mother}")
+                                item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
+                                InstallationMetadata(item.loggedDate, item.actor)
+                                TextButton(onClick = {
+                                    expandedInstallations = if (itemKey in expandedInstallations) expandedInstallations - itemKey else expandedInstallations + itemKey
+                                }) {
+                                    Text(if (itemKey in expandedInstallations) "LESS DETAILS" else "MORE DETAILS")
+                                }
+                                if (itemKey in expandedInstallations) {
+                                    Divider(color = MaterialTheme.colorScheme.outlineVariant)
+                                    ValueLine("Event reference", item.id.ifBlank { "Imported history" })
+                                    ValueLine("Recorded status", item.status.replace('_', ' '))
+                                }
+                            }
                         }
                     }
                 }
@@ -1253,15 +1674,34 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                     pages = maxOf(1, (state.installationTotal + 4) / 5),
                     previousEnabled = state.installationPage > 0,
                     nextEnabled = (state.installationPage + 1) * 5 < state.installationTotal,
-                    previous = { model.loadInstallations(query, state.installationPage - 1) },
-                    next = { model.loadInstallations(query, state.installationPage + 1) },
+                    previous = { model.loadInstallations(effectiveHistoryQuery, state.installationPage - 1) },
+                    next = { model.loadInstallations(effectiveHistoryQuery, state.installationPage + 1) },
                 )
             }
         }
     }
     scanTarget?.let { target ->
         val label = if (target == 0) "mother lock" else "sub-lock ${listOf("B", "C", "D")[target - 1]}"
-        ScannerDialog(label, onScanned = { value -> if (target == 0) mother = value else subs = subs.toMutableList().also { it[target - 1] = value }; scanTarget = null }, onDismiss = { scanTarget = null })
+        key(target) {
+            ScannerDialog(
+                label,
+                onScanned = { value ->
+                    val existing = buildList {
+                        if (target != 0) add(mother)
+                        subs.forEachIndexed { index, serial -> if (target != index + 1) add(serial) }
+                    }.filter(String::isNotBlank)
+                    if (existing.any { it.equals(value, ignoreCase = true) }) {
+                        scanError = "$value is already used in this kit."
+                        scanTarget = null
+                    } else {
+                        scanError = null
+                        if (target == 0) mother = value else subs = subs.toMutableList().also { it[target - 1] = value }
+                        scanTarget = if (target < 3) target + 1 else null
+                    }
+                },
+                onDismiss = { scanTarget = null },
+            )
+        }
     }
 }
 
@@ -1281,7 +1721,7 @@ private fun InstallScreen(state: NativeUiState, model: DtcViewModel) {
     LaunchedEffect(query) { delay(350); model.loadInstallations(query) }
     LaunchedEffect(shareReady) { if (shareReady) { delay(100); listState.animateScrollToItem(2) } }
 
-    LazyColumn(Modifier.fillMaxSize(), state = listState, contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), state = listState, verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Truck and kit assignment", "Install", "Truck", "00", "Record the current truck assignment and configuration check without mixing it with archive history.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1303,8 +1743,8 @@ private fun InstallScreen(state: NativeUiState, model: DtcViewModel) {
             Panel("Send installation report", Modifier.fillMaxWidth()) {
                 Text(message, style = MaterialTheme.typography.labelLarge)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = { openWhatsApp(context, message); shareReady = false }, shape = RectangleShape, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12351F), contentColor = SignalGreen)) { Text("SEND TO WHATSAPP") }
-                    OutlinedButton(onClick = { shareReady = false }, shape = RectangleShape) { Text("DISMISS") }
+                    Button(onClick = { openWhatsApp(context, message); shareReady = false }, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF12351F), contentColor = SignalGreen)) { Text("SEND TO WHATSAPP") }
+                    OutlinedButton(onClick = { shareReady = false }, shape = RoundedCornerShape(7.dp)) { Text("DISMISS") }
                 }
             }
         }
@@ -1326,17 +1766,17 @@ private fun InstallForm(
     OutlinedTextField(truck, setTruck, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
     Text("SERVING COMPANY", style = MaterialTheme.typography.labelMedium)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("mrs" to "MRS", "dangote" to "Dangote").forEach { (value, label) -> FilterChip(company == value, { setCompany(value) }, { Text(label) }) }
+        listOf("mrs" to "MRS", "dangote" to "Dangote").forEach { (value, label) -> SelectionChip(company == value, { setCompany(value) }, label) }
     }
     ScanField("Mother lock", mother, setMother) { scan(0) }
     subs.forEachIndexed { index, value -> ScanField("Sub-lock ${listOf("B", "C", "D")[index]}", value, { setSub(index, it) }) { scan(index + 1) } }
     Text("COMPLETION STATUS", style = MaterialTheme.typography.labelMedium)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        listOf("successful" to "Successful", "completed_with_issues" to "With issues", "failed" to "Failed").forEach { (value, label) -> FilterChip(status == value, { setStatus(value) }, { Text(label) }) }
+        listOf("successful" to "Successful", "completed_with_issues" to "With issues", "failed" to "Failed").forEach { (value, label) -> SelectionChip(status == value, { setStatus(value) }, label) }
     }
     Button(
         onClick = submit, enabled = !working && truck.isNotBlank() && mother.isNotBlank() && subs.all(String::isNotBlank),
-        modifier = Modifier.fillMaxWidth().height(50.dp), shape = RectangleShape,
+        modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
     ) { Text("RECORD INSTALLATION") }
 }
 
@@ -1350,7 +1790,7 @@ private fun InstallationArchive(state: NativeUiState, query: String, search: (St
                 Row(Modifier.fillMaxWidth()) { Text(item.truck, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium); Text(item.status.replace('_', ' ').uppercase(), style = MaterialTheme.typography.labelMedium, color = SignalGreen) }
                 Text("Mother  ${item.mother}")
                 Text("B/C/D  ${item.subs.joinToString("  /  ")}", style = MaterialTheme.typography.bodyMedium)
-                Text(item.actor, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                InstallationMetadata(item.loggedDate, item.actor)
             }
         }
     }
@@ -1382,10 +1822,10 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
     var notes by remember { mutableStateOf("") }
     var scanDevice by remember { mutableStateOf(false) }
 
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Fault and lifecycle control", "Repair", "Operations", number(state.repairPool.size), "Report field faults and disposition the same repair pool used by the web app.") }
         item {
-            OutlinedButton(onClick = { faultOpen = !faultOpen }, Modifier.fillMaxWidth(), shape = RectangleShape) {
+            OutlinedButton(onClick = { faultOpen = !faultOpen }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(7.dp)) {
                 Icon(if (faultOpen) Icons.Outlined.Close else Icons.Outlined.Warning, null); Spacer(Modifier.width(8.dp)); Text(if (faultOpen) "CLOSE FAULT REPORT" else "REPORT FAULT")
             }
         }
@@ -1397,7 +1837,7 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                 ChoiceLine("Fault type", faultType, listOf("device_offline" to "Offline", "dynamic_password_failed" to "Password failed", "sub_lock_not_opening" to "Sub-lock", "charging_failure" to "Charging", "configuration_error" to "Configuration", "hardware_damage" to "Damage", "seal_discrepancy" to "Seal", "other" to "Other")) { faultType = it }
                 Text("LOCKS AFFECTED", style = MaterialTheme.typography.labelMedium)
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    listOf("mother" to "Mother", "B" to "B", "C" to "C", "D" to "D").forEach { (value, label) -> FilterChip(value in affected, { affected = if (value in affected) affected - value else affected + value }, { Text(label) }) }
+                    listOf("mother" to "Mother", "B" to "B", "C" to "C", "D" to "D").forEach { (value, label) -> SelectionChip(value in affected, { affected = if (value in affected) affected - value else affected + value }, label) }
                 }
                 ChoiceLine("Truck location", location, listOf("in_transit" to "In transit", "customer_location" to "Customer", "installation_point" to "Install point")) { location = it }
                 ChoiceLine("Device online", online, listOf("yes" to "Yes", "intermittent" to "Intermittent", "no" to "No")) { online = it }
@@ -1426,7 +1866,7 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                     },
                     enabled = !state.working && truck.isNotBlank() && device.isNotBlank() && description.isNotBlank() && affected.isNotEmpty()
                         && (staticUsed != "yes" || staticAuthBy.isNotBlank()) && (incidentStatus != "closed" || closureBy.isNotBlank()),
-                    modifier = Modifier.fillMaxWidth().height(52.dp), shape = RectangleShape,
+                    modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(7.dp),
                 ) { Text("SUBMIT FAULT REPORT") }
             }
         }
@@ -1440,8 +1880,8 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                             Text(item.removalReason?.replace('_', ' ') ?: "Reason not recorded", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             item.removalNotes?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             if (state.dashboard?.user?.role == "supervisor") FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { model.triage(item.deviceId, "revived") }, enabled = !state.working, shape = RectangleShape, colors = ButtonDefaults.buttonColors(containerColor = SignalGreen)) { Text("REVIVE") }
-                                OutlinedButton(onClick = { model.triage(item.deviceId, "dead") }, enabled = !state.working, shape = RectangleShape, border = BorderStroke(1.dp, DtcRed), colors = ButtonDefaults.outlinedButtonColors(contentColor = DtcRed)) { Text("DECLARE DEAD") }
+                                Button(onClick = { model.triage(item.deviceId, "revived") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = SignalGreen)) { Text("REVIVE") }
+                                OutlinedButton(onClick = { model.triage(item.deviceId, "dead") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, DtcRed), colors = ButtonDefaults.outlinedButtonColors(contentColor = DtcRed)) { Text("DECLARE DEAD") }
                             } else Text("Supervisor approval is required for disposition.", color = SafetyAmber)
                         }
                     }
@@ -1455,14 +1895,14 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
 @Composable
 private fun LookupScreen(result: LookupSnapshot?, lookup: (String) -> Unit) {
     var query by remember { mutableStateOf("") }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", "01", "Search by truck plate or mother-lock serial.") }
         item {
             Column {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(query, { query = it }, Modifier.weight(1f), label = { Text("Truck or mother serial") }, singleLine = true)
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = { lookup(query) }, enabled = query.isNotBlank(), modifier = Modifier.height(56.dp), shape = RectangleShape) { Icon(Icons.Outlined.Search, "Search") }
+                    Button(onClick = { lookup(query) }, enabled = query.isNotBlank(), modifier = Modifier.height(56.dp), shape = RoundedCornerShape(7.dp)) { Icon(Icons.Outlined.Search, "Search") }
                 }
                 if (result == null) EmptyState("Enter a truck plate or mother serial to inspect its current state.")
                 else if (result.targetKind == "unknown") EmptyState("No registered truck or mother lock matched ${result.label}.")
@@ -1502,19 +1942,19 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
     var correctionCompany by remember(result?.targetId) { mutableStateOf(result?.company?.lowercase()?.takeIf { result.companyDeclared }.orEmpty()) }
     var correctionNotes by remember(result?.targetId) { mutableStateOf("") }
     var verifyOpen by remember(result?.targetId) { mutableStateOf(false) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", if (result?.targetKind == "unknown" || result == null) "00" else "01", "Search a truck plate or mother serial and inspect the complete operational cockpit.") }
         item {
             Panel("Lookup target") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     OutlinedTextField(query, { query = it.uppercase() }, Modifier.weight(1f), label = { Text("Truck or mother serial") }, singleLine = true)
                     Spacer(Modifier.width(8.dp))
-                    Button(onClick = { recent = listOf(query) + recent.filterNot { it == query }.take(4); model.lookup(query) }, enabled = query.isNotBlank(), modifier = Modifier.height(56.dp), shape = RectangleShape) { Icon(Icons.Outlined.Search, "Search") }
+                    Button(onClick = { recent = listOf(query) + recent.filterNot { it == query }.take(4); model.lookup(query) }, enabled = query.isNotBlank(), modifier = Modifier.height(56.dp), shape = RoundedCornerShape(7.dp)) { Icon(Icons.Outlined.Search, "Search") }
                 }
                 if (recent.isNotEmpty()) {
                     Text("RECENT LOOKUPS", style = MaterialTheme.typography.labelMedium)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        recent.forEach { value -> FilterChip(false, { query = value; model.lookup(value) }, { Text(value) }) }
+                        recent.forEach { value -> SelectionChip(false, { query = value; model.lookup(value) }, value) }
                     }
                 }
             }
@@ -1551,23 +1991,27 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
             }
             item {
                 Panel("Operational actions") {
-                    Text("Continue with this truck and its current kit already loaded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Choose the next operation for ${result.label}. The truck and current kit will stay loaded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { verifyOpen = true }, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                            Icon(Icons.Outlined.Shield, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("VERIFY PHYSICAL KIT")
-                        }
-                        OutlinedButton(onClick = model::openInstallFromLookup, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                            Icon(Icons.Outlined.Build, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("INSTALL OR REPLACE KIT")
-                        }
-                        OutlinedButton(onClick = model::openRepairsFromLookup, Modifier.fillMaxWidth(), shape = RectangleShape) {
-                            Icon(Icons.Outlined.HomeRepairService, null)
-                            Spacer(Modifier.width(8.dp))
-                            Text("REPORT FAULT")
-                        }
+                        OperationAction(
+                            icon = Icons.Outlined.Shield,
+                            title = "Verify physical kit",
+                            detail = "Compare the locks on the truck with the current registry.",
+                            primary = true,
+                            onClick = { verifyOpen = true },
+                        )
+                        OperationAction(
+                            icon = Icons.Outlined.Build,
+                            title = "Install or replace kit",
+                            detail = "Open Install with this truck and its assignment preloaded.",
+                            onClick = model::openInstallFromLookup,
+                        )
+                        OperationAction(
+                            icon = Icons.Outlined.HomeRepairService,
+                            title = "Report fault",
+                            detail = "Open Repairs with this asset already selected.",
+                            onClick = model::openRepairsFromLookup,
+                        )
                     }
                     if (state.dashboard?.user?.role == "supervisor" && result.targetKind == "truck" && result.targetId != null) {
                         Divider()
@@ -1577,20 +2021,25 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
                         Button(
                             onClick = { model.setTruckCompany(result.targetId, correctionCompany, correctionNotes, result.label) },
                             enabled = !state.working && correctionCompany.isNotBlank(),
-                            shape = RectangleShape,
+                            shape = RoundedCornerShape(7.dp),
                         ) { Text("UPDATE SERVING COMPANY") }
                     }
                 }
             }
             if (result.reviewItems.isNotEmpty()) item {
-                Panel("Conflict reviews") {
+                Panel("Reviews for ${result.label}") {
+                    Text(
+                        "Only open reviews linked to this searched asset are shown here.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                     result.reviewItems.forEach { review ->
                         Column(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                             Text(review.title.ifBlank { review.kind.replace('_', ' ') }, color = DtcRed, style = MaterialTheme.typography.titleMedium)
                             Text(review.summary.ifBlank { "This asset has an open review." }, style = MaterialTheme.typography.bodyMedium)
-                            review.details.take(3).forEach { detail -> ValueLine(detail.label, detail.value) }
+                            review.details.take(4).forEach { detail -> ValueLine(detail.label, detail.value) }
                             if (state.dashboard?.user?.role == "supervisor") {
-                                OutlinedButton(onClick = { model.open(AppScreen.Review) }, Modifier.fillMaxWidth(), shape = RectangleShape) { Text("OPEN REVIEW") }
+                                OutlinedButton(onClick = { model.open(AppScreen.Review) }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(7.dp)) { Text("OPEN REVIEW") }
                             }
                         }
                     }
@@ -1668,7 +2117,7 @@ private fun VerifyKitDialog(
                     )
                 },
                 enabled = mother.isNotBlank() && !working,
-                shape = RectangleShape,
+                shape = RoundedCornerShape(7.dp),
             ) {
                 if (working) {
                     CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
@@ -1702,30 +2151,50 @@ private fun VerifyKitDialog(
 private fun ReviewScreen(state: NativeUiState, model: DtcViewModel) {
     val canDecide = state.dashboard?.user?.role == "supervisor"
     var selected by remember { mutableStateOf<ReviewItem?>(null) }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Exception control", "Open", "Reviews", state.reviews.size.toString().padStart(2, '0'), if (canDecide) "Inspect the complete evidence before resolving or dismissing." else "Review evidence is visible; supervisor authority is required for decisions.") }
         if (state.reviews.isEmpty()) item { EmptyState("No reviews need attention.") }
         items(state.reviews, key = { it.id }) { review ->
             Surface(
                 Modifier.fillMaxWidth().clickable { selected = review },
-                shape = RectangleShape, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                shape = RoundedCornerShape(8.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
             ) {
-                Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Outlined.Warning, null, tint = DtcRed)
-                    Column(Modifier.padding(horizontal = 14.dp).weight(1f)) {
-                        Text(
-                            review.title.ifBlank { review.kind.replace('_', ' ') },
-                            style = MaterialTheme.typography.titleMedium,
-                        )
-                        Text(
-                            review.summary.ifBlank { "This record needs a supervisor to check its evidence." },
-                            maxLines = 3,
-                            overflow = TextOverflow.Ellipsis,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Surface(Modifier.size(38.dp), color = DtcRed.copy(alpha = .14f), shape = RoundedCornerShape(6.dp)) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Outlined.Warning, null, Modifier.size(21.dp), tint = DtcRed)
+                            }
+                        }
+                        Column(Modifier.padding(start = 11.dp).weight(1f)) {
+                            Text("OPEN REVIEW", style = MaterialTheme.typography.labelMedium, color = DtcRed)
+                            Text(review.kind.replace('_', ' ').uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Surface(color = MaterialTheme.colorScheme.surfaceVariant, shape = RoundedCornerShape(4.dp)) {
+                            Text(
+                                "${review.details.size} EVIDENCE",
+                                Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                            )
+                        }
                     }
-                    Icon(Icons.Outlined.ChevronRight, null)
+                    Text(
+                        review.title.ifBlank { review.kind.replace('_', ' ') },
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        review.summary.ifBlank { "This record needs a supervisor to check its evidence." },
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("OPEN DETAILS", Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurface)
+                        Icon(Icons.Outlined.ChevronRight, null, Modifier.size(20.dp), tint = DtcRed)
+                    }
                 }
             }
         }
@@ -1783,8 +2252,8 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
                 Button(
                     onClick = { action("resolve", notes) },
                     colors = ButtonDefaults.buttonColors(containerColor = SignalGreen),
-                    shape = RectangleShape,
-                ) { Text("MARK REVIEWED") }
+                    shape = RoundedCornerShape(6.dp),
+                ) { Text("RESOLVE REVIEW") }
             } else {
                 TextButton(onClick = onDismiss) { Text("CLOSE") }
             }
@@ -1792,7 +2261,7 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
         dismissButton = {
             if (canDecide) {
                 Column(horizontalAlignment = Alignment.End) {
-                    TextButton(onClick = { action("dismiss", notes) }) { Text("NO ACTION NEEDED") }
+                    TextButton(onClick = { action("dismiss", notes) }) { Text("DISMISS REVIEW") }
                     TextButton(onClick = onDismiss) { Text("CANCEL") }
                 }
             }
@@ -1803,7 +2272,7 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsScreen(state: NativeUiState, model: DtcViewModel) {
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Application control", "System", "Settings", "02", "Appearance and secure profile controls for this Android device.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1822,7 +2291,7 @@ private fun AppearancePanel(state: NativeUiState, model: DtcViewModel, modifier:
     Text("Theme changes apply immediately across phone and tablet layouts.", color = MaterialTheme.colorScheme.onSurfaceVariant)
     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         listOf(ThemeMode.System to Icons.Outlined.Settings, ThemeMode.Light to Icons.Outlined.LightMode, ThemeMode.Dark to Icons.Outlined.DarkMode).forEach { (mode, icon) ->
-            FilterChip(state.themeMode == mode, { model.setTheme(mode) }, { Text(mode.name) }, leadingIcon = { Icon(icon, null, Modifier.size(18.dp)) })
+            SelectionChip(state.themeMode == mode, { model.setTheme(mode) }, mode.name, icon)
         }
     }
     Divider()
@@ -1871,7 +2340,7 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
     var resetPassword by remember { mutableStateOf("") }
     var resetPasswordVisible by remember { mutableStateOf(false) }
     val settings = state.settings
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(bottom = PageEndPadding)) {
+    LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Application control", "System", "Settings", if (state.dashboard?.user?.role == "supervisor") "04" else "02", "Profile and appearance for every operator; team access and exports for supervisors.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
@@ -1900,7 +2369,7 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                         Button(
                             onClick = { model.createUser(username, displayName, password, role, company.ifBlank { null }) { username = ""; displayName = ""; password = ""; addOpen = false } },
                             enabled = !state.working && username.length >= 3 && displayName.isNotBlank() && password.length >= 12,
-                            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RectangleShape,
+                            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
                         ) { Text("ADD USER") }
                     }
                     settings?.users?.forEach { user ->
@@ -1931,7 +2400,7 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                                     OutlinedButton(
                                         onClick = { model.setUserActive(user.id, !user.isActive) },
                                         enabled = !state.working && user.id != settings.currentUserId,
-                                        shape = RectangleShape,
+                                        shape = RoundedCornerShape(7.dp),
                                     ) { Text(if (user.isActive) "DEACTIVATE" else "ACTIVATE") }
                                 }
                                 if (resetUserId == user.id) {
@@ -1965,7 +2434,7 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                                         },
                                         enabled = !state.working && resetPassword.length >= 12,
                                         modifier = Modifier.fillMaxWidth(),
-                                        shape = RectangleShape,
+                                        shape = RoundedCornerShape(7.dp),
                                         colors = ButtonDefaults.buttonColors(containerColor = DtcRed),
                                     ) { Text("RESET PASSWORD") }
                                 }
@@ -1990,26 +2459,223 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
     }
 }
 
+@Composable
+private fun InstallationProgress(currentStep: Int) {
+    val steps = listOf("Load truck", "Confirm kit", "Re-check", "Ready")
+    Surface(
+        Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp)) {
+            val showLabels = maxWidth >= 560.dp
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                    steps.forEachIndexed { index, label ->
+                        val complete = index < currentStep
+                        val active = index == currentStep
+                        Column(
+                            Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Surface(
+                                Modifier.size(30.dp),
+                                color = when {
+                                    complete -> SignalGreen.copy(alpha = .16f)
+                                    active -> DtcRed
+                                    else -> MaterialTheme.colorScheme.surfaceVariant
+                                },
+                                shape = CircleShape,
+                                border = BorderStroke(
+                                    1.dp,
+                                    when {
+                                        complete -> SignalGreen
+                                        active -> DtcRed
+                                        else -> MaterialTheme.colorScheme.outline
+                                    },
+                                ),
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    if (complete) {
+                                        Icon(Icons.Outlined.CheckCircle, "Completed", Modifier.size(17.dp), tint = SignalGreen)
+                                    } else {
+                                        Text(
+                                            "${index + 1}",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = if (active) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                }
+                            }
+                            if (showLabels) {
+                                Text(
+                                    label,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (active || complete) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+                if (!showLabels) {
+                    Text(
+                        "STEP ${currentStep + 1} OF ${steps.size}  /  ${steps[currentStep].uppercase()}",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = DtcRed,
+                    )
+                }
+            }
+        }
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ChoiceLine(label: String, value: String, options: List<Pair<String, String>>, setValue: (String) -> Unit) {
-    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-            options.forEach { (option, text) -> FilterChip(value == option, { setValue(option) }, { Text(text) }) }
+private fun InstallationArchiveControls(
+    filter: String,
+    setFilter: (String) -> Unit,
+    newestFirst: Boolean,
+    toggleSort: () -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        listOf("all" to "All", "successful" to "Successful", "issues" to "Issues", "failed" to "Failed").forEach { (value, label) ->
+            SelectionChip(filter == value, { setFilter(value) }, label)
+        }
+        OutlinedButton(onClick = toggleSort, shape = RoundedCornerShape(7.dp)) {
+            Icon(Icons.Outlined.SwapVert, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(if (newestFirst) "NEWEST" else "OLDEST")
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun RegistryArchiveControls(
+    filter: String,
+    setFilter: (String) -> Unit,
+    ascending: Boolean,
+    toggleSort: () -> Unit,
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+        verticalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        listOf("all" to "All", "owned" to "Owned", "released_external" to "Released").forEach { (value, label) ->
+            SelectionChip(filter == value, { setFilter(value) }, label)
+        }
+        OutlinedButton(onClick = toggleSort, shape = RoundedCornerShape(7.dp)) {
+            Icon(Icons.Outlined.SwapVert, null, Modifier.size(18.dp))
+            Spacer(Modifier.width(6.dp))
+            Text(if (ascending) "A-Z" else "Z-A")
         }
     }
 }
 
 @Composable
+private fun OperationAction(
+    icon: ImageVector,
+    title: String,
+    detail: String,
+    primary: Boolean = false,
+    onClick: () -> Unit,
+) {
+    val container = if (primary) DtcRed else MaterialTheme.colorScheme.surfaceVariant
+    val content = if (primary) Color.White else MaterialTheme.colorScheme.onSurface
+    Surface(
+        Modifier.fillMaxWidth().clickable(onClick = onClick),
+        color = container,
+        contentColor = content,
+        shape = RoundedCornerShape(7.dp),
+        border = if (primary) null else BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Surface(
+                Modifier.size(40.dp),
+                color = if (primary) Color.White.copy(alpha = .16f) else MaterialTheme.colorScheme.surface,
+                shape = RoundedCornerShape(7.dp),
+            ) {
+                Box(contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(21.dp)) }
+            }
+            Column(Modifier.padding(horizontal = 12.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(title, style = MaterialTheme.typography.titleMedium)
+                Text(detail, style = MaterialTheme.typography.bodyMedium, color = content.copy(alpha = .78f))
+            }
+            Icon(Icons.Outlined.ChevronRight, null, Modifier.size(20.dp))
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ChoiceLine(label: String, value: String, options: List<Pair<String, String>>, setValue: (String) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+            options.forEach { (option, text) -> SelectionChip(value == option, { setValue(option) }, text) }
+        }
+    }
+}
+
+@Composable
+private fun SelectionChip(
+    selected: Boolean,
+    onClick: () -> Unit,
+    label: String,
+    leadingIcon: ImageVector? = null,
+) {
+    FilterChip(
+        selected = selected,
+        onClick = onClick,
+        label = { Text(label, fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium) },
+        leadingIcon = if (leadingIcon == null) null else {
+            { Icon(leadingIcon, null, Modifier.size(18.dp)) }
+        },
+        colors = FilterChipDefaults.filterChipColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            iconColor = MaterialTheme.colorScheme.onSurfaceVariant,
+            selectedContainerColor = DtcRed.copy(alpha = 0.22f),
+            selectedLabelColor = MaterialTheme.colorScheme.onSurface,
+            selectedLeadingIconColor = DtcRed,
+        ),
+        border = FilterChipDefaults.filterChipBorder(
+            enabled = true,
+            selected = selected,
+            borderColor = MaterialTheme.colorScheme.outline,
+            selectedBorderColor = DtcRed,
+            borderWidth = 1.dp,
+            selectedBorderWidth = 2.dp,
+        ),
+    )
+}
+
+@Composable
 private fun ScanField(label: String, value: String, setValue: (String) -> Unit, scan: () -> Unit) {
-    Column(Modifier.fillMaxWidth()) {
-        Text(label.uppercase(), style = MaterialTheme.typography.labelMedium)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             if (maxWidth < 390.dp) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    OutlinedTextField(value, setValue, Modifier.fillMaxWidth(), placeholder = { Text("SCAN OR ENTER ${label.uppercase()}") }, singleLine = true)
-                    OutlinedButton(onClick = scan, Modifier.fillMaxWidth().height(48.dp), shape = RectangleShape) {
+                    OutlinedTextField(
+                        value,
+                        setValue,
+                        Modifier.fillMaxWidth(),
+                        placeholder = { Text("Scan or enter $label") },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (value.isNotBlank()) Icon(Icons.Outlined.CheckCircle, "$label captured", tint = SignalGreen)
+                        },
+                    )
+                    OutlinedButton(onClick = scan, Modifier.fillMaxWidth().height(48.dp), shape = RoundedCornerShape(7.dp)) {
                         Icon(Icons.Outlined.QrCodeScanner, "Scan $label", Modifier.size(18.dp))
                         Spacer(Modifier.width(7.dp))
                         Text("SCAN $label".uppercase())
@@ -2017,8 +2683,17 @@ private fun ScanField(label: String, value: String, setValue: (String) -> Unit, 
                 }
             } else {
                 Row(Modifier.fillMaxWidth()) {
-                    OutlinedTextField(value, setValue, Modifier.weight(1f), placeholder = { Text("SCAN OR ENTER ${label.uppercase()}") }, singleLine = true)
-                    Button(onClick = scan, Modifier.height(56.dp), shape = RectangleShape) {
+                    OutlinedTextField(
+                        value,
+                        setValue,
+                        Modifier.weight(1f),
+                        placeholder = { Text("Scan or enter $label") },
+                        singleLine = true,
+                        trailingIcon = {
+                            if (value.isNotBlank()) Icon(Icons.Outlined.CheckCircle, "$label captured", tint = SignalGreen)
+                        },
+                    )
+                    Button(onClick = scan, Modifier.height(56.dp), shape = RoundedCornerShape(7.dp)) {
                         Icon(Icons.Outlined.QrCodeScanner, "Scan $label", Modifier.size(18.dp))
                         Spacer(Modifier.width(7.dp))
                         Text("SCAN")
@@ -2035,13 +2710,51 @@ private fun ArchiveItemHeader(title: String, status: String, statusColor: Color)
         if (maxWidth < 380.dp) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(title, style = MaterialTheme.typography.titleMedium)
-                Text(status.uppercase(), color = statusColor, style = MaterialTheme.typography.labelMedium)
+                StatusBadge(status, statusColor)
             }
         } else {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                Text(status.uppercase(), color = statusColor, style = MaterialTheme.typography.labelMedium)
+                StatusBadge(status, statusColor)
             }
+        }
+    }
+}
+
+@Composable
+private fun StatusBadge(label: String, tone: Color) {
+    Surface(
+        color = tone.copy(alpha = .12f),
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, tone.copy(alpha = .42f)),
+    ) {
+        Text(
+            label.replace('_', ' ').uppercase(),
+            Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+            color = tone,
+            style = MaterialTheme.typography.labelMedium,
+        )
+    }
+}
+
+@Composable
+private fun InstallationMetadata(loggedDate: Long, actor: String) {
+    Row(
+        Modifier.fillMaxWidth().padding(top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(Icons.Outlined.Schedule, null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        Column(Modifier.padding(start = 8.dp).weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            Text(
+                formatInstallationTimestamp(loggedDate),
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                "Recorded by $actor",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
         }
     }
 }
@@ -2060,16 +2773,84 @@ private fun ArchivePager(
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("PAGE ${page + 1} / $pages", style = MaterialTheme.typography.labelMedium)
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedButton(previous, Modifier.weight(1f), enabled = previousEnabled, shape = RectangleShape) { Text("PREV") }
-                    OutlinedButton(next, Modifier.weight(1f), enabled = nextEnabled, shape = RectangleShape) { Text("NEXT") }
+                    OutlinedButton(previous, Modifier.weight(1f), enabled = previousEnabled, shape = RoundedCornerShape(7.dp)) { Text("PREV") }
+                    OutlinedButton(next, Modifier.weight(1f), enabled = nextEnabled, shape = RoundedCornerShape(7.dp)) { Text("NEXT") }
                 }
             }
         } else {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                OutlinedButton(previous, enabled = previousEnabled, shape = RectangleShape) { Text("PREV") }
+                OutlinedButton(previous, enabled = previousEnabled, shape = RoundedCornerShape(7.dp)) { Text("PREV") }
                 Text("PAGE ${page + 1} / $pages", style = MaterialTheme.typography.labelMedium)
-                OutlinedButton(next, enabled = nextEnabled, shape = RectangleShape) { Text("NEXT") }
+                OutlinedButton(next, enabled = nextEnabled, shape = RoundedCornerShape(7.dp)) { Text("NEXT") }
             }
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceModeSwitch(
+    primaryLabel: String,
+    primaryIcon: ImageVector,
+    secondaryLabel: String,
+    secondaryIcon: ImageVector,
+    secondaryCount: Int,
+    primarySelected: Boolean,
+    selectPrimary: () -> Unit,
+    selectSecondary: () -> Unit,
+) {
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(5.dp), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            WorkspaceModeOption(
+                label = primaryLabel,
+                icon = primaryIcon,
+                selected = primarySelected,
+                onClick = selectPrimary,
+                modifier = Modifier.weight(1f),
+            )
+            WorkspaceModeOption(
+                label = if (secondaryCount > 0) "$secondaryLabel  ${number(secondaryCount)}" else secondaryLabel,
+                icon = secondaryIcon,
+                selected = !primarySelected,
+                onClick = selectSecondary,
+                modifier = Modifier.weight(1f),
+            )
+        }
+    }
+}
+
+@Composable
+private fun WorkspaceModeOption(
+    label: String,
+    icon: ImageVector,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier.clickable(onClick = onClick),
+        shape = RoundedCornerShape(6.dp),
+        color = if (selected) DtcRed.copy(alpha = 0.18f) else Color.Transparent,
+        border = if (selected) BorderStroke(1.5.dp, DtcRed) else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 52.dp).padding(horizontal = 10.dp, vertical = 9.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(icon, null, Modifier.size(19.dp), tint = if (selected) DtcRed else MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(7.dp))
+            Text(
+                label.uppercase(),
+                style = MaterialTheme.typography.labelMedium,
+                color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -2079,36 +2860,78 @@ private fun SearchField(value: String, setValue: (String) -> Unit, placeholder: 
     OutlinedTextField(
         value, setValue, Modifier.fillMaxWidth(), placeholder = { Text(placeholder) }, singleLine = true,
         leadingIcon = { Icon(Icons.Outlined.Search, null) }, trailingIcon = { if (value.isNotEmpty()) IconButton(onClick = { setValue("") }) { Icon(Icons.Outlined.Close, "Clear") } },
+        shape = RoundedCornerShape(8.dp),
     )
 }
 
 @Composable
 private fun Panel(title: String, modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     val compact = LocalCompactMode.current
-    Surface(modifier, shape = RectangleShape, border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline)) {
+    Surface(
+        modifier.animateContentSize(),
+        shape = RoundedCornerShape(8.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+    ) {
         Column(Modifier.fillMaxWidth()) {
-            Row(Modifier.fillMaxWidth().height(if (compact) 36.dp else 42.dp).background(MaterialTheme.colorScheme.surfaceVariant).border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(horizontal = if (compact) 10.dp else 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("[ ${title.uppercase()} ]", style = MaterialTheme.typography.titleMedium)
+            Row(
+                Modifier.fillMaxWidth().height(if (compact) 46.dp else 54.dp)
+                    .padding(horizontal = if (compact) 12.dp else 16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Box(Modifier.size(7.dp).background(DtcRed, CircleShape))
+                Spacer(Modifier.width(11.dp))
+                Text(title, style = MaterialTheme.typography.titleMedium)
             }
-            Column(Modifier.fillMaxWidth().padding(if (compact) 8.dp else 12.dp), verticalArrangement = Arrangement.spacedBy(if (compact) 7.dp else 10.dp), content = content)
+            Divider(Modifier.padding(horizontal = if (compact) 12.dp else 16.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            Column(
+                Modifier.fillMaxWidth().padding(if (compact) 12.dp else 16.dp),
+                verticalArrangement = Arrangement.spacedBy(if (compact) 10.dp else 14.dp),
+                content = content,
+            )
         }
     }
 }
 
 @Composable
 private fun ValueLine(label: String, value: String, color: Color? = null) {
-    Row(Modifier.fillMaxWidth().height(46.dp).border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label.uppercase(), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value.uppercase(), style = MaterialTheme.typography.labelLarge, color = color ?: MaterialTheme.colorScheme.onSurface)
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 44.dp)
+            .border(width = 0.dp, color = Color.Transparent)
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            value,
+            Modifier.weight(1f),
+            style = MaterialTheme.typography.labelLarge,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
+    Divider(color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 @Composable
 private fun EmptyState(message: String) {
-    Column(Modifier.fillMaxWidth().padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-        Icon(Icons.Outlined.CameraAlt, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(10.dp))
-        Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodyLarge)
+    Column(
+        Modifier.fillMaxWidth().padding(horizontal = 24.dp, vertical = 32.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        Surface(Modifier.size(48.dp), color = MaterialTheme.colorScheme.surfaceVariant, shape = CircleShape) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Outlined.Inbox, null, Modifier.size(24.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Text("Nothing to show", style = MaterialTheme.typography.titleMedium)
+        Text(
+            message,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodyMedium,
+        )
     }
 }
 
@@ -2138,6 +2961,20 @@ private fun openWhatsApp(context: Context, message: String) {
 }
 
 private fun number(value: Int): String = NumberFormat.getIntegerInstance().format(value)
+
+private fun duplicateLockSerials(mother: String, subs: List<String>): List<String> =
+    (listOf(mother) + subs)
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .groupBy(String::uppercase)
+        .filterValues { it.size > 1 }
+        .values
+        .map { it.first() }
+
+private fun formatInstallationTimestamp(unixSeconds: Long): String {
+    if (unixSeconds <= 0) return "Date unavailable"
+    return SimpleDateFormat("d MMM yyyy, HH:mm", Locale.getDefault()).format(Date(unixSeconds * 1000))
+}
 
 private fun demoState(): NativeUiState {
     val registrations = listOf(

@@ -12,15 +12,18 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Close
@@ -41,9 +44,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -57,6 +65,8 @@ import java.util.concurrent.Executors
 @Composable
 fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
+    val configuration = LocalConfiguration.current
+    val cameraHeight = if (configuration.screenWidthDp >= 600) 204.dp else 178.dp
     var permissionGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
@@ -65,13 +75,14 @@ fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> U
 
     Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false)) {
         Surface(
-            Modifier.widthIn(max = 440.dp).fillMaxWidth().padding(12.dp),
+            Modifier.widthIn(max = 480.dp).fillMaxWidth().padding(16.dp),
             color = MaterialTheme.colorScheme.surface,
-            border = BorderStroke(2.dp, MaterialTheme.colorScheme.outline),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+            shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
         ) {
-            Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             if (permissionGranted) {
-                CameraScanner(label = label, onScanned = onScanned, onDismiss = onDismiss)
+                CameraScanner(label = label, cameraHeight = cameraHeight, onScanned = onScanned, onDismiss = onDismiss)
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Camera permission is needed to scan lock labels.")
@@ -83,11 +94,12 @@ fun ScannerDialog(label: String, onScanned: (String) -> Unit, onDismiss: () -> U
     }
 }
 
-@OptIn(ExperimentalGetImage::class)
+@androidx.annotation.OptIn(ExperimentalGetImage::class)
 @Composable
-private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss: () -> Unit) {
+private fun CameraScanner(label: String, cameraHeight: Dp, onScanned: (String) -> Unit, onDismiss: () -> Unit) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
+    val haptic = LocalHapticFeedback.current
     var retryGeneration by remember { mutableStateOf(0) }
     val executor = remember(retryGeneration) { Executors.newSingleThreadExecutor() }
     val scanner = remember(retryGeneration) {
@@ -107,23 +119,57 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
         }
     }
 
-    Box(Modifier.fillMaxWidth().height(230.dp).background(MaterialTheme.colorScheme.surfaceVariant)) {
-        AndroidView(factory = { previewView }, modifier = Modifier.fillMaxWidth().height(230.dp))
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(
-            Modifier.align(Alignment.TopCenter).fillMaxWidth().background(Ink.copy(alpha = .88f)).padding(start = 8.dp),
+            Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("[ SCAN ${label.uppercase()} ]", Modifier.weight(1f), color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.labelMedium)
-            IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close scanner", tint = androidx.compose.ui.graphics.Color.White) }
+            Box(Modifier.width(4.dp).height(40.dp).background(DtcRed, androidx.compose.foundation.shape.RoundedCornerShape(3.dp)))
+            Column(Modifier.padding(start = 11.dp).weight(1f)) {
+                Text("Scan $label", style = MaterialTheme.typography.titleLarge)
+                Text("Hold the label steady inside the guide.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, "Close scanner") }
         }
-        Text(
-            "ALIGN CODE WITHIN FRAME",
-            modifier = Modifier.align(Alignment.Center).background(Ink.copy(alpha = .82f)).padding(horizontal = 8.dp, vertical = 5.dp),
-            color = androidx.compose.ui.graphics.Color.White,
-            style = MaterialTheme.typography.labelMedium,
-        )
+        Box(
+            Modifier.fillMaxWidth().height(cameraHeight)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), androidx.compose.foundation.shape.RoundedCornerShape(8.dp))
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(8.dp)),
+        ) {
+            AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
+            Box(
+                Modifier.align(Alignment.Center).fillMaxWidth(.70f).height(92.dp)
+                    .border(BorderStroke(2.dp, DtcRed)),
+            )
+            Text(
+                "ALIGN CODE WITHIN FRAME",
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp)
+                    .background(Ink.copy(alpha = .84f), androidx.compose.foundation.shape.RoundedCornerShape(4.dp))
+                    .padding(horizontal = 9.dp, vertical = 5.dp),
+                color = androidx.compose.ui.graphics.Color.White,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            if (cameraError != null) {
+                Column(
+                    Modifier.align(Alignment.Center).fillMaxWidth().background(Ink.copy(alpha = .94f)).padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(cameraError!!, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.bodyMedium)
+                    Button(onClick = {
+                        cameraError = null
+                        consumed = false
+                        retryGeneration += 1
+                    }) { Text("Retry camera") }
+                }
+            }
+        }
         Row(
-            Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Ink.copy(alpha = .88f)).padding(start = 8.dp),
+            Modifier.fillMaxWidth().height(48.dp)
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline), androidx.compose.foundation.shape.RoundedCornerShape(7.dp))
+                .padding(start = 14.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -131,10 +177,10 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
                 when {
                     hasTorch == false -> "TORCH / UNAVAILABLE"
                     torch -> "TORCH / ON"
-                    else -> "TORCH / OFF"
+                    else -> "TORCH / READY"
                 },
                 style = MaterialTheme.typography.labelMedium,
-                color = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White,
+                color = if (torch) DtcRed else MaterialTheme.colorScheme.onSurface,
             )
             IconButton(onClick = {
                 torch = !torch
@@ -143,22 +189,8 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
                 Icon(
                     if (torch) Icons.Outlined.FlashOn else Icons.Outlined.FlashOff,
                     if (hasTorch == false) "Torch unavailable" else "Toggle torch",
-                    tint = if (torch) DtcRed else androidx.compose.ui.graphics.Color.White,
+                    tint = if (torch) DtcRed else MaterialTheme.colorScheme.onSurface,
                 )
-            }
-        }
-        if (cameraError != null) {
-            Column(
-                Modifier.align(Alignment.Center).fillMaxWidth().background(Ink.copy(alpha = .94f)).padding(18.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text(cameraError!!, color = androidx.compose.ui.graphics.Color.White, style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = {
-                    cameraError = null
-                    consumed = false
-                    retryGeneration += 1
-                }) { Text("Retry camera") }
             }
         }
     }
@@ -183,6 +215,7 @@ private fun CameraScanner(label: String, onScanned: (String) -> Unit, onDismiss:
                                 val value = barcodes.firstNotNullOfOrNull { it.rawValue?.trim()?.takeIf(String::isNotEmpty) }
                                 if (value != null && !consumed) {
                                     consumed = true
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     onScanned(value)
                                 }
                             }
