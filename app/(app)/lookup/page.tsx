@@ -249,7 +249,7 @@ export default function LookupPage() {
                   Verify physical kit
                 </Link>
                 <Link className="btn btn--secondary" href={withContext('/fault', { truck: truckContext, device: deviceContext })}>
-                  Report fault
+                  Remove or replace
                 </Link>
                 <Link className="btn btn--secondary" href={withContext('/movement', { truck: truckContext, device: deviceContext })}>
                   Reassign or replace

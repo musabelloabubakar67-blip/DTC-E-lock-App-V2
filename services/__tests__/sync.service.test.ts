@@ -136,6 +136,68 @@ describe('sync.service — happy path actually changes the registry', () => {
     expect(row).toBeTruthy();
     expect(row!.description).toBe('device offline');
   });
+
+  it('rejects an invalid verification without blocking the next valid mutation', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'FZE805SY');
+    const deviceId = createDevice(db, orgId, {
+      type: 'mother',
+      serial: 'SYNC-AFTER-INVALID-1',
+      status: 'in_service',
+    });
+
+    const invalidVerification = verificationMutation('mut-invalid-verification-1', 1, 1000, {
+      truckId: 'FZE805SY',
+      motherSerial: 'SYNC-INCOMPLETE-1',
+      motherSource: 'manual',
+      subs: [],
+    });
+    const validFault = faultMutation('mut-after-invalid-1', 2, 2000, {
+      truckId,
+      deviceId,
+      locksAffected: ['mother'],
+      description: 'still applies after invalid verification',
+    });
+
+    const outcomes = applySyncBatch(db, {
+      orgId,
+      actor: { id: installerId, orgId, role: 'installer' },
+      mutations: [invalidVerification, validFault],
+    });
+
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(['rejected', 'applied']);
+    expect(
+      db.select().from(syncMutations).where(eq(syncMutations.clientMutationId, invalidVerification.id)).get()?.status,
+    ).toBe('rejected');
+    expect(db.select().from(faultReports).where(eq(faultReports.deviceId, deviceId)).all()).toHaveLength(1);
+  });
+
+  it('rejects verification for an unknown truck without creating a review', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const mutation = verificationMutation('mut-unknown-verification-truck-1', 1, 1000, {
+      truckId: 'FZE245DI',
+      motherSerial: '487068953883',
+      motherSource: 'manual',
+      subs: [
+        { serial: 'CEF351F7223E', source: 'manual' },
+        { serial: 'E4FE82D014DE', source: 'manual' },
+        { serial: 'ECCE2ADC3C59', source: 'manual' },
+      ],
+    });
+
+    const [outcome] = applySyncBatch(db, {
+      orgId,
+      actor: { id: installerId, orgId, role: 'installer' },
+      mutations: [mutation],
+    });
+
+    expect(outcome.status).toBe('rejected');
+    if (outcome.status !== 'rejected') throw new Error('Expected rejected sync outcome');
+    expect(outcome.message).toContain('not registered');
+    expect(db.select().from(conflictReviews).all()).toHaveLength(0);
+  });
 });
 
 describe('sync.service — native visible identifiers', () => {

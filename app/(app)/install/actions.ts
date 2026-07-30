@@ -17,3 +17,24 @@ export async function submitInstallation(
     return { status: 'error', message: 'Could not save on this device' };
   }
 }
+
+export async function submitInstallationBySerials(values: {
+  truckPlate: string;
+  company: InstallKitFormValues['company'];
+  motherSerial: string;
+  subSerials: [string, string, string];
+  checklist?: InstallKitFormValues['checklist'];
+}): Promise<SubmitInstallationResult> {
+  try {
+    const mutation = await enqueueMutation(offlineDb, {
+      endpoint: '/api/mobile/installations',
+      payload: {
+        ...values,
+        installMode: 'changed',
+      },
+    });
+    return { status: 'queued', mutationId: mutation.id };
+  } catch {
+    return { status: 'error', message: 'Could not save on this device' };
+  }
+}

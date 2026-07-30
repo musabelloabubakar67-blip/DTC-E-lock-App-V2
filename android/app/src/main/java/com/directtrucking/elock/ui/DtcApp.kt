@@ -74,6 +74,7 @@ import androidx.compose.material.icons.outlined.QrCodeScanner
 import androidx.compose.material.icons.outlined.RadioButtonUnchecked
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Schedule
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Shield
@@ -85,6 +86,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.Divider
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -127,6 +129,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -168,6 +171,9 @@ enum class AppScreen(val label: String, val icon: ImageVector) {
 data class NativeUiState(
     val booting: Boolean = true,
     val working: Boolean = false,
+    val lookupWorking: Boolean = false,
+    val lookupVersion: Long = 0,
+    val lookupQuery: String = "",
     val dashboard: DashboardSnapshot? = null,
     val selected: AppScreen = AppScreen.Dashboard,
     val registry: List<RegistryItem> = emptyList(),
@@ -191,6 +197,7 @@ data class NativeUiState(
 )
 
 class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) : ViewModel() {
+    private var latestLookupRequestId = 0L
     private val _state = MutableStateFlow(
         if (demo) demoState() else NativeUiState(
             themeMode = runCatching { ThemeMode.valueOf(api.appearanceMode()) }.getOrDefault(ThemeMode.Dark),
@@ -327,12 +334,47 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         _state.update { it.copy(reviews = api.reviews()) }
     }
 
-    fun lookup(query: String) = launchWork {
+    fun lookup(query: String, minimal: Boolean = false) {
+        val normalized = query.trim().uppercase()
+        if (normalized.isBlank()) return
+        val requestId = ++latestLookupRequestId
         if (demo) {
-            _state.update { it.copy(message = "Demo lookup loaded for ${query.uppercase()}") }
-            return@launchWork
+            _state.update {
+                it.copy(
+                    lookupWorking = false,
+                    lookupVersion = it.lookupVersion + 1,
+                    lookupQuery = normalized,
+                    message = "Demo lookup loaded for $normalized",
+                )
+            }
+            return
         }
-        _state.update { it.copy(lookup = api.lookup(query)) }
+        viewModelScope.launch {
+            _state.update { it.copy(lookupWorking = true, error = null) }
+            runCatching { api.lookup(normalized, minimal) }
+                .onSuccess { result ->
+                    if (requestId == latestLookupRequestId) {
+                        _state.update {
+                            it.copy(
+                                lookup = result,
+                                lookupWorking = false,
+                                lookupVersion = it.lookupVersion + 1,
+                                lookupQuery = normalized,
+                            )
+                        }
+                    }
+                }
+                .onFailure { error ->
+                    if (requestId == latestLookupRequestId) {
+                        _state.update {
+                            it.copy(
+                                lookupWorking = false,
+                                error = error.message ?: "Truck lookup failed",
+                            )
+                        }
+                    }
+                }
+        }
     }
 
     fun openInstallFromLookup() {
@@ -365,7 +407,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
     }
 
     fun verifyLookupKit(
-        truck: String?,
+        truck: String,
         mother: String,
         subs: List<String>,
         motherSource: String,
@@ -373,13 +415,12 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         done: () -> Unit,
     ) = launchWork {
         val sync = api.verifyKit(truck, mother, subs, motherSource, subSources)
-        val query = truck?.takeIf(String::isNotBlank) ?: mother
         _state.update {
             it.copy(
-                lookup = if (sync.applied > 0) api.lookup(query) else it.lookup,
-                reviews = if (sync.applied > 0 && it.dashboard?.user?.role == "supervisor") api.reviews() else it.reviews,
+                lookup = if (sync.submittedApplied) api.lookup(truck) else it.lookup,
+                reviews = if (sync.submittedApplied && it.dashboard?.user?.role == "supervisor") api.reviews() else it.reviews,
                 pendingSyncCount = sync.pending,
-                message = if (sync.applied > 0) "Physical kit verified" else "Verification saved on this device / pending sync",
+                message = if (sync.submittedApplied) "Physical kit verified" else "Verification saved on this device / pending sync",
             )
         }
         done()
@@ -448,7 +489,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         done: () -> Unit,
     ) = launchWork {
         val sync = api.installBySerials(truck, company, mother, subs, mode, checklist)
-        if (sync.applied > 0) {
+        if (sync.submittedApplied) {
             val (items, total) = api.installationHistory()
             _state.update { it.copy(installations = items, installationTotal = total, installationPage = 0, pendingSyncCount = sync.pending, message = "Installation recorded") }
         } else {
@@ -459,15 +500,41 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
 
     fun triage(deviceId: String, outcome: String) = launchWork {
         val sync = api.triage(deviceId, outcome)
-        val pool = if (sync.applied > 0) api.repairPool() else _state.value.repairPool
-        _state.update { it.copy(repairPool = pool, pendingSyncCount = sync.pending, message = if (sync.applied > 0) {
+        val pool = if (sync.submittedApplied) api.repairPool() else _state.value.repairPool
+        _state.update { it.copy(repairPool = pool, pendingSyncCount = sync.pending, message = if (sync.submittedApplied) {
             if (outcome == "revived") "Device returned to available" else "Device declared dead"
         } else "Repair decision saved on this device / pending sync") }
     }
 
+    fun repairBatch(
+        truck: String,
+        reason: String,
+        description: String,
+        notes: String,
+        items: List<Pair<String, String?>>,
+        done: () -> Unit,
+    ) = launchWork {
+        val sync = api.repairBatch(truck, reason, description, notes, items)
+        val refreshedPool = if (sync.submittedApplied) api.repairPool() else _state.value.repairPool
+        val refreshedLookup = if (sync.submittedApplied) runCatching { api.lookup(truck) }.getOrNull() else null
+        _state.update {
+            it.copy(
+                repairPool = refreshedPool,
+                lookup = refreshedLookup ?: it.lookup,
+                pendingSyncCount = sync.pending,
+                message = if (sync.submittedApplied) {
+                    "${items.size} repair operation${if (items.size == 1) "" else "s"} completed"
+                } else {
+                    "Repair operation saved on this device / pending sync"
+                },
+            )
+        }
+        done()
+    }
+
     fun reportFault(payload: org.json.JSONObject, done: () -> Unit) = launchWork {
         val sync = api.reportFault(payload)
-        _state.update { it.copy(pendingSyncCount = sync.pending, message = if (sync.applied > 0) "Fault report recorded" else "Fault report saved on this device / pending sync") }
+        _state.update { it.copy(pendingSyncCount = sync.pending, message = if (sync.submittedApplied) "Fault report recorded" else "Fault report saved on this device / pending sync") }
         done()
     }
 
@@ -483,7 +550,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
                     sync.pending == 0 && sync.applied > 0 -> "${sync.applied} queued changes synced"
                     sync.pending == 0 -> "Sync queue is clear"
                     !sync.reachedServer -> "Still offline / ${sync.pending} changes safely queued"
-                    else -> "${sync.pending} changes still need server review"
+                    else -> "${sync.pending} changes are still waiting to sync"
                 },
             ) }
         }
@@ -526,8 +593,19 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
             _state.update { current -> current.copy(reviews = current.reviews.filterNot { it.id == id }, message = "Demo review updated") }
             return@launchWork
         }
-        api.reviewAction(id, action, notes)
-        _state.update { it.copy(reviews = api.reviews(), message = "Review ${if (action == "resolve") "resolved" else "dismissed"}") }
+        val serverMessage = api.reviewAction(id, action, notes)
+        _state.update {
+            it.copy(
+                reviews = api.reviews(),
+                message = serverMessage.ifBlank {
+                    when (action) {
+                        "resolve" -> "Review resolved"
+                        "dismiss" -> "Review dismissed"
+                        else -> "Saved operation retried"
+                    }
+                },
+            )
+        }
     }
 
     fun changePassword(current: String, next: String, confirm: String, done: () -> Unit) = launchWork {
@@ -886,8 +964,17 @@ private fun NavRow(screen: AppScreen, active: Boolean, dark: Boolean = false, de
 
 @Composable
 private fun PhoneNav(selected: AppScreen, open: (AppScreen) -> Unit, more: () -> Unit) {
-    Surface(color = Ink, contentColor = IndustrialText, border = BorderStroke(1.dp, Rule)) {
-        Row(Modifier.fillMaxWidth().navigationBarsPadding().height(76.dp).padding(horizontal = 6.dp, vertical = 5.dp), horizontalArrangement = Arrangement.SpaceAround) {
+    Surface(
+        modifier = Modifier.fillMaxWidth().navigationBarsPadding(),
+        color = Ink,
+        contentColor = IndustrialText,
+        border = BorderStroke(1.dp, Rule),
+    ) {
+        Row(
+            Modifier.fillMaxWidth().height(68.dp).padding(horizontal = 4.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             listOf(AppScreen.Dashboard, AppScreen.Register, AppScreen.Install, AppScreen.Lookup).forEach { screen ->
                 PhoneNavItem(screen.label, screen.icon, selected == screen) { open(screen) }
             }
@@ -899,17 +986,28 @@ private fun PhoneNav(selected: AppScreen, open: (AppScreen) -> Unit, more: () ->
 @Composable
 private fun RowScope.PhoneNavItem(label: String, icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
     Box(
-        Modifier.weight(1f).fillMaxHeight().clickable(onClick = onClick)
-            .padding(horizontal = 2.dp)
+        Modifier.weight(1f).fillMaxHeight().padding(horizontal = 1.dp)
             .background(if (selected) PanelRaised else Color.Transparent, RoundedCornerShape(8.dp)),
+        contentAlignment = Alignment.Center,
     ) {
         Column(
-            Modifier.align(Alignment.Center),
+            Modifier.fillMaxSize().clickable(onClick = onClick).padding(horizontal = 1.dp, vertical = 5.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+            verticalArrangement = Arrangement.Center,
         ) {
             Icon(icon, label, Modifier.size(22.dp), tint = if (selected) DtcRed else IndustrialMuted)
-            Text(label.uppercase(), style = MaterialTheme.typography.labelMedium, color = if (selected) IndustrialText else IndustrialMuted)
+            Spacer(Modifier.height(3.dp))
+            Text(
+                label.uppercase(),
+                color = if (selected) IndustrialText else IndustrialMuted,
+                fontSize = 10.sp,
+                lineHeight = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                letterSpacing = 0.sp,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -924,6 +1022,8 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.CONFIRM
                 else HapticFeedbackConstants.LONG_PRESS,
             )
+            delay(3_500)
+            model.clearNotice()
         }
     }
     LaunchedEffect(state.error) {
@@ -932,12 +1032,13 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) HapticFeedbackConstants.REJECT
                 else HapticFeedbackConstants.LONG_PRESS,
             )
+            delay(6_000)
+            model.clearNotice()
         }
     }
     Column(modifier.fillMaxSize()) {
         if (state.error != null) StatusStrip(state.error, true, model::clearNotice)
         else if (state.message != null) StatusStrip(state.message, false, model::clearNotice)
-        if (state.pendingSyncCount > 0) PendingQueueStrip(state.pendingSyncCount, state.working) { model.syncQueue() }
         AnimatedVisibility(visible = state.working, enter = fadeIn(), exit = fadeOut()) {
             LinearProgressIndicator(
                 Modifier.fillMaxWidth().height(3.dp),
@@ -966,18 +1067,6 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PendingQueueStrip(count: Int, working: Boolean, retry: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().background(Color(0xFF3A2C0A)).border(BorderStroke(1.dp, SafetyAmber)).padding(horizontal = 14.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(Icons.Outlined.Refresh, null, tint = SafetyAmber, modifier = Modifier.size(18.dp))
-        Text("$count CHANGE${if (count == 1) "" else "S"} SAFELY QUEUED", Modifier.padding(horizontal = 9.dp).weight(1f), color = Color.White, style = MaterialTheme.typography.labelMedium)
-        TextButton(onClick = retry, enabled = !working) { Text("RETRY", color = SafetyAmber) }
     }
 }
 
@@ -1093,40 +1182,6 @@ private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Fleet operational register", "Fleet", number(data.counts.inServiceMothers), "32%", "${number(data.counts.availableMothers)} mother locks remain available for assignment.") }
         item {
-            Surface(
-                Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(8.dp),
-                color = when (data.healthTone) {
-                    "danger" -> DtcRed.copy(alpha = .12f)
-                    "warning" -> SafetyAmber.copy(alpha = .11f)
-                    else -> SignalGreen.copy(alpha = .09f)
-                },
-                border = BorderStroke(1.dp, when (data.healthTone) { "danger" -> DtcRed.copy(alpha = .72f); "warning" -> SafetyAmber.copy(alpha = .72f); else -> SignalGreen.copy(alpha = .6f) }),
-            ) {
-                Row(Modifier.padding(horizontal = 16.dp, vertical = 14.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Surface(
-                        Modifier.size(42.dp),
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = .72f),
-                        shape = RoundedCornerShape(8.dp),
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                if (data.healthTone == "ok") Icons.Outlined.Shield else Icons.Outlined.Warning,
-                                null,
-                                Modifier.size(22.dp),
-                                tint = if (data.healthTone == "ok") SignalGreen else if (data.healthTone == "warning") SafetyAmber else DtcRed,
-                            )
-                        }
-                    }
-                    Column(Modifier.padding(start = 13.dp).weight(1f)) {
-                        Text(data.healthTitle, style = MaterialTheme.typography.titleMedium)
-                        Text(data.healthDetail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    if (data.counts.openReviews > 0) IconButton(onClick = { open(AppScreen.Review) }) { Icon(Icons.Outlined.ChevronRight, "Open reviews") }
-                }
-            }
-        }
-        item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val metrics = listOf(
                     MetricData("Open reviews", data.counts.openReviews, Icons.Outlined.ListAlt, if (data.counts.openReviews > 0) DtcRed else null),
@@ -1169,11 +1224,15 @@ private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) 
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 if (maxWidth >= 650.dp) {
-                    Row {
-                        TrustPanel(data, Modifier.weight(1f)); FeedPanel("Recent registrations", data.registrations, Modifier.weight(1f)); FeedPanel("Attention queue", data.reviews, Modifier.weight(1f))
+                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TrustPanel(data, Modifier.weight(1f))
+                        FeedPanel("Recent registrations", data.registrations, Modifier.weight(1f))
                     }
                 } else {
-                    Column { TrustPanel(data); FeedPanel("Recent registrations", data.registrations); FeedPanel("Attention queue", data.reviews) }
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        TrustPanel(data)
+                        FeedPanel("Recent registrations", data.registrations)
+                    }
                 }
             }
         }
@@ -1513,16 +1572,26 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
         listOf(query.trim(), statusTerm).filter(String::isNotBlank).joinToString(" ")
     }
     LaunchedEffect(effectiveHistoryQuery) { delay(350); model.loadInstallations(effectiveHistoryQuery, 0) }
-    LaunchedEffect(state.lookup) {
+    LaunchedEffect(state.lookupVersion) {
         val loaded = state.lookup
-        if (loaded != null && loaded.targetKind == "truck" && loaded.label.equals(truck, ignoreCase = true)) {
-            loadedTruck = loaded.label
-            company = loaded.company.takeIf { loaded.companyDeclared }?.lowercase() ?: ""
-            if (loaded.mother != null && loaded.subs.all { it.second != null }) {
-                mother = loaded.mother
-                subs = loaded.subs.map { it.second.orEmpty() }
-                mode = "same_kit"
-            } else {
+        if (loaded != null && state.lookupQuery.equals(truck.trim(), ignoreCase = true)) {
+            if (loaded.targetKind == "truck") {
+                loadedTruck = loaded.label
+                company = loaded.company.takeIf { loaded.companyDeclared }?.lowercase() ?: ""
+                if (loaded.mother != null && loaded.subs.all { it.second != null }) {
+                    mother = loaded.mother
+                    subs = loaded.subs.map { it.second.orEmpty() }
+                    mode = "same_kit"
+                } else {
+                    mother = ""
+                    subs = listOf("", "", "")
+                    mode = "changed"
+                }
+            } else if (loaded.targetKind == "unknown") {
+                loadedTruck = truck.trim().uppercase()
+                company = ""
+                mother = ""
+                subs = listOf("", "", "")
                 mode = "changed"
             }
         }
@@ -1535,10 +1604,13 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
             listState.animateScrollToItem(4)
         }
     }
-    val message = remember(truck, company, mother, subs) { installMessage(truck, company, mother, subs) }
+    val message = remember(truck, mother, subs) { installMessage(truck, mother, subs) }
     val requiredComplete = listOf("configConfirmed", "deviceResponsive", "sublocksResponsive", "overallStatus").all { !checklist[it].isNullOrBlank() }
     val kitComplete = mother.isNotBlank() && subs.all(String::isNotBlank)
     val duplicateSerials = duplicateLockSerials(mother, subs)
+    val newAssignment = loadedTruck.isNotBlank() &&
+        state.lookup?.targetKind == "unknown" &&
+        state.lookup?.label?.equals(loadedTruck, ignoreCase = true) == true
     val installStep = when {
         loadedTruck.isBlank() -> 0
         company.isBlank() || !kitComplete || duplicateSerials.isNotEmpty() -> 1
@@ -1578,9 +1650,23 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
         if (workbenchOpen) {
         item {
             Panel("Truck assignment") {
-                OutlinedTextField(truck, { truck = it.uppercase(); loadedTruck = "" }, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
-                Button(onClick = { model.lookup(truck) }, enabled = truck.isNotBlank() && !state.working, modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp)) { Text("LOAD TRUCK KIT") }
-                if (loadedTruck.isBlank()) Text("Load the truck before submitting this installation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                OutlinedTextField(truck, {
+                    truck = it.uppercase()
+                    loadedTruck = ""
+                }, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
+                Button(
+                    onClick = { model.lookup(truck, minimal = true) },
+                    enabled = truck.isNotBlank() && !state.lookupWorking,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(7.dp),
+                ) { Text(if (state.lookupWorking) "CHECKING TRUCK" else "CHECK TRUCK") }
+                if (state.lookupWorking) Text("Checking the current assignment...", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else if (loadedTruck.isBlank()) Text("Load the truck before submitting this installation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                else if (newAssignment) {
+                    ValueLine("Truck", loadedTruck)
+                    ValueLine("Assignment", "New truck / first kit assignment", SignalGreen)
+                    Text("This truck will be added to the registry when the scanned installation is recorded.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 else {
                     ValueLine("Truck", loadedTruck)
                     ValueLine("Current mother", state.lookup?.mother ?: "Not assigned")
@@ -1619,7 +1705,7 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                 OutlinedTextField(checklist["configNotes"].orEmpty(), { checklist = checklist + ("configNotes" to it) }, Modifier.fillMaxWidth(), label = { Text("Configuration notes") }, minLines = 2)
                 OutlinedTextField(checklist["issuesNotes"].orEmpty(), { checklist = checklist + ("issuesNotes" to it) }, Modifier.fillMaxWidth(), label = { Text("Issues and follow-up notes") }, minLines = 2)
                 Button(
-                    onClick = { model.installBySerials(truck, company, mother, subs, mode, checklist) { shareReady = true } },
+                    onClick = { model.installBySerials(loadedTruck, company, mother, subs, mode, checklist) { shareReady = true } },
                     enabled = !state.working && loadedTruck.isNotBlank() && company.isNotBlank() && kitComplete && duplicateSerials.isEmpty() && requiredComplete,
                     modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(7.dp),
                 ) { Text("RECORD INSTALLATION") }
@@ -1655,6 +1741,15 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
                                 Text("Mother  ${item.mother}")
                                 item.subs.forEachIndexed { index, serial -> Text("Sub-lock ${listOf("B", "C", "D")[index]}  $serial") }
                                 InstallationMetadata(item.loggedDate, item.actor)
+                                OutlinedButton(
+                                    onClick = { openWhatsApp(context, installMessage(item.truck, item.mother, item.subs)) },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    shape = RoundedCornerShape(7.dp),
+                                ) {
+                                    Icon(Icons.Outlined.Share, null, Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("SHARE TO WHATSAPP")
+                                }
                                 TextButton(onClick = {
                                     expandedInstallations = if (itemKey in expandedInstallations) expandedInstallations - itemKey else expandedInstallations + itemKey
                                 }) {
@@ -1717,7 +1812,7 @@ private fun InstallScreen(state: NativeUiState, model: DtcViewModel) {
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var shareReady by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
-    val message = remember(truck, company, mother, subs) { installMessage(truck, company, mother, subs) }
+    val message = remember(truck, mother, subs) { installMessage(truck, mother, subs) }
     LaunchedEffect(query) { delay(350); model.loadInstallations(query) }
     LaunchedEffect(shareReady) { if (shareReady) { delay(100); listState.animateScrollToItem(2) } }
 
@@ -1799,75 +1894,172 @@ private fun InstallationArchive(state: NativeUiState, query: String, search: (St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
-    var faultOpen by remember(state.workflowTruck, state.workflowDevice) {
-        mutableStateOf(state.workflowTruck.isNotBlank() || state.workflowDevice.isNotBlank())
-    }
     var truck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
-    var device by remember(state.workflowDevice) { mutableStateOf(state.workflowDevice) }
-    var reportedBy by remember { mutableStateOf("self_identified") }
-    var faultType by remember { mutableStateOf("device_offline") }
-    var affected by remember { mutableStateOf(setOf("mother")) }
-    var location by remember { mutableStateOf("installation_point") }
-    var online by remember { mutableStateOf("no") }
+    var requestedTruck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
+    var selected by remember { mutableStateOf(setOf<String>()) }
+    var modes by remember {
+        mutableStateOf(mapOf("mother" to "replace", "B" to "replace", "C" to "replace", "D" to "replace"))
+    }
+    var replacements by remember {
+        mutableStateOf(mapOf("mother" to "", "B" to "", "C" to "", "D" to ""))
+    }
+    var reason by remember { mutableStateOf("faulty") }
     var description by remember { mutableStateOf("") }
-    var remoteOpen by remember { mutableStateOf("not_applicable") }
-    var staticUsed by remember { mutableStateOf("no") }
-    var staticAuthBy by remember { mutableStateOf("") }
-    var resolution by remember { mutableStateOf("pending") }
-    var minutes by remember { mutableStateOf("") }
-    var followup by remember { mutableStateOf("no") }
-    var followupDetails by remember { mutableStateOf("") }
-    var incidentStatus by remember { mutableStateOf("open_pending_followup") }
-    var closureBy by remember { mutableStateOf("") }
     var notes by remember { mutableStateOf("") }
-    var scanDevice by remember { mutableStateOf(false) }
+    var scanTarget by remember { mutableStateOf<String?>(null) }
+
+    val loadedKit = state.lookup?.takeIf {
+        it.targetKind == "truck" &&
+            requestedTruck.isNotBlank() &&
+            it.label.equals(requestedTruck, ignoreCase = true) &&
+            it.mother != null
+    }
+    val positionSerials = mapOf(
+        "mother" to loadedKit?.mother,
+        "B" to loadedKit?.subs?.firstOrNull { it.first == "B" }?.second,
+        "C" to loadedKit?.subs?.firstOrNull { it.first == "C" }?.second,
+        "D" to loadedKit?.subs?.firstOrNull { it.first == "D" }?.second,
+    )
+    val availablePositions = listOf("mother", "B", "C", "D").filter { !positionSerials[it].isNullOrBlank() }
+    val replacementsComplete = selected.all { modes[it] == "remove" || !replacements[it].isNullOrBlank() }
+    val awaitingReplacement = selected.any { modes[it] == "replace" && replacements[it].isNullOrBlank() }
+    val kitCurrentlyIncomplete = loadedKit != null && availablePositions.size < 4
+    val willBeIncomplete = kitCurrentlyIncomplete || selected.any { modes[it] == "remove" }
+    val removesMother = "mother" in selected && modes["mother"] == "remove"
+    val incompatible = removesMother && selected.any { it != "mother" && modes[it] == "replace" }
+    val ready = loadedKit != null && selected.isNotEmpty() && description.isNotBlank() && replacementsComplete && !incompatible
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
-        item { PageHeader("Fault and lifecycle control", "Repair", "Operations", number(state.repairPool.size), "Report field faults and disposition the same repair pool used by the web app.") }
+        item { PageHeader("Hardware lifecycle", "Repair", "Operations", number(state.repairPool.size), "Remove or replace one device, several positions, or an entire installed kit.") }
         item {
-            OutlinedButton(onClick = { faultOpen = !faultOpen }, Modifier.fillMaxWidth(), shape = RoundedCornerShape(7.dp)) {
-                Icon(if (faultOpen) Icons.Outlined.Close else Icons.Outlined.Warning, null); Spacer(Modifier.width(8.dp)); Text(if (faultOpen) "CLOSE FAULT REPORT" else "REPORT FAULT")
-            }
-        }
-        if (faultOpen) item {
-            Panel("Fault report") {
-                OutlinedTextField(truck, { truck = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Truck plate") }, singleLine = true)
-                ScanField("Affected device", device, { device = it }) { scanDevice = true }
-                ChoiceLine("Reported by", reportedBy, listOf("station_manager" to "Station manager", "customer_rep" to "Customer rep", "driver" to "Driver", "team_member" to "Team member", "self_identified" to "Self")) { reportedBy = it }
-                ChoiceLine("Fault type", faultType, listOf("device_offline" to "Offline", "dynamic_password_failed" to "Password failed", "sub_lock_not_opening" to "Sub-lock", "charging_failure" to "Charging", "configuration_error" to "Configuration", "hardware_damage" to "Damage", "seal_discrepancy" to "Seal", "other" to "Other")) { faultType = it }
-                Text("LOCKS AFFECTED", style = MaterialTheme.typography.labelMedium)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    listOf("mother" to "Mother", "B" to "B", "C" to "C", "D" to "D").forEach { (value, label) -> SelectionChip(value in affected, { affected = if (value in affected) affected - value else affected + value }, label) }
-                }
-                ChoiceLine("Truck location", location, listOf("in_transit" to "In transit", "customer_location" to "Customer", "installation_point" to "Install point")) { location = it }
-                ChoiceLine("Device online", online, listOf("yes" to "Yes", "intermittent" to "Intermittent", "no" to "No")) { online = it }
-                OutlinedTextField(description, { description = it }, Modifier.fillMaxWidth(), label = { Text("Fault description") }, minLines = 3)
-                ChoiceLine("Remote open", remoteOpen, listOf("success" to "Success", "failed" to "Failed", "not_applicable" to "N/A")) { remoteOpen = it }
-                ChoiceLine("Static password used", staticUsed, listOf("yes" to "Yes", "no" to "No")) { staticUsed = it }
-                if (staticUsed == "yes") ChoiceLine("Static password authorised by", staticAuthBy, state.supervisors) { staticAuthBy = it }
-                ChoiceLine("Resolution", resolution, listOf("resolved_remotely" to "Remote", "static_password_issued" to "Static PW", "device_reconfigured" to "Reconfigured", "device_replaced" to "Replaced", "pending" to "Pending", "escalated" to "Escalated")) { resolution = it }
-                OutlinedTextField(minutes, { minutes = it.filter(Char::isDigit) }, Modifier.fillMaxWidth(), label = { Text("Minutes to resolve") }, singleLine = true)
-                ChoiceLine("Follow-up required", followup, listOf("yes" to "Yes", "no" to "No")) { followup = it }
-                if (followup == "yes") OutlinedTextField(followupDetails, { followupDetails = it }, Modifier.fillMaxWidth(), label = { Text("Follow-up details") }, minLines = 2)
-                ChoiceLine("Incident status", incidentStatus, listOf("closed" to "Closed", "open_pending_followup" to "Open / follow-up")) { incidentStatus = it }
-                if (incidentStatus == "closed") ChoiceLine("Closure approved by", closureBy, state.supervisors) { closureBy = it }
-                OutlinedTextField(notes, { notes = it }, Modifier.fillMaxWidth(), label = { Text("Notes") }, minLines = 2)
+            Panel("1 / Load installed kit") {
+                OutlinedTextField(
+                    truck,
+                    {
+                        truck = it.uppercase()
+                        requestedTruck = ""
+                    },
+                    Modifier.fillMaxWidth(),
+                    label = { Text("Truck plate") },
+                    singleLine = true,
+                )
                 Button(
                     onClick = {
-                        val payload = org.json.JSONObject()
-                            .put("truckPlate", truck).put("deviceSerial", device).put("reportedBy", reportedBy).put("faultType", faultType)
-                            .put("locksAffected", org.json.JSONArray(affected.toList())).put("truckLocation", location).put("deviceOnline", online)
-                            .put("description", description).put("remoteOpen", remoteOpen).put("staticPwUsed", staticUsed).put("resolution", resolution)
-                            .put("followupRequired", followup).put("followupDetails", followupDetails).put("incidentStatus", incidentStatus).put("notes", notes)
-                            .put("staticPwAuthBy", if (staticUsed == "yes") staticAuthBy else org.json.JSONObject.NULL)
-                            .put("closureBy", if (incidentStatus == "closed") closureBy else org.json.JSONObject.NULL)
-                        minutes.toIntOrNull()?.let { payload.put("minutesToResolve", it) }
-                        model.reportFault(payload) { description = ""; notes = ""; faultOpen = false }
+                        requestedTruck = truck.trim().uppercase()
+                        selected = emptySet()
+                        replacements = replacements.mapValues { "" }
+                        model.lookup(requestedTruck, minimal = true)
                     },
-                    enabled = !state.working && truck.isNotBlank() && device.isNotBlank() && description.isNotBlank() && affected.isNotEmpty()
-                        && (staticUsed != "yes" || staticAuthBy.isNotBlank()) && (incidentStatus != "closed" || closureBy.isNotBlank()),
-                    modifier = Modifier.fillMaxWidth().height(52.dp), shape = RoundedCornerShape(7.dp),
-                ) { Text("SUBMIT FAULT REPORT") }
+                    enabled = truck.isNotBlank() && !state.lookupWorking,
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(7.dp),
+                ) { Text(if (state.lookupWorking) "LOADING KIT" else "LOAD KIT") }
+                if (requestedTruck.isNotBlank() && loadedKit == null && !state.lookupWorking) {
+                    Text("No active kit loaded for $requestedTruck.", color = MaterialTheme.colorScheme.error)
+                }
+            }
+        }
+        if (loadedKit != null) {
+            item {
+                Panel("2 / Select devices") {
+                    OutlinedButton(
+                        onClick = {
+                            selected = if (selected.size == availablePositions.size) emptySet() else availablePositions.toSet()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(7.dp),
+                    ) { Text(if (selected.size == availablePositions.size) "CLEAR SELECTION" else "SELECT ENTIRE KIT") }
+
+                    availablePositions.forEach { position ->
+                        val label = if (position == "mother") "Mother lock" else "Sub-lock $position"
+                        val active = position in selected
+                        Surface(
+                            Modifier.fillMaxWidth(),
+                            border = BorderStroke(
+                                if (active) 2.dp else 1.dp,
+                                if (active) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline,
+                            ),
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(
+                                        checked = active,
+                                        onCheckedChange = {
+                                            selected = if (active) selected - position else selected + position
+                                        },
+                                    )
+                                    Column(Modifier.weight(1f)) {
+                                        Text(label, style = MaterialTheme.typography.titleMedium)
+                                        Text(positionSerials[position].orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
+                                if (active) {
+                                    ChoiceLine(
+                                        "Operation",
+                                        modes[position].orEmpty(),
+                                        listOf("replace" to "Replace now", "remove" to "Remove only"),
+                                    ) { mode -> modes = modes + (position to mode) }
+                                    if (modes[position] == "replace") {
+                                        ScanField(
+                                            "Replacement serial",
+                                            replacements[position].orEmpty(),
+                                            { value -> replacements = replacements + (position to value.uppercase()) },
+                                        ) { scanTarget = position }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            item {
+                Panel("3 / Reason and confirmation") {
+                    ChoiceLine("Reason", reason, listOf("faulty" to "Faulty", "damaged" to "Damaged")) { reason = it }
+                    OutlinedTextField(
+                        description,
+                        { description = it },
+                        Modifier.fillMaxWidth(),
+                        label = { Text("What happened?") },
+                        minLines = 3,
+                    )
+                    OutlinedTextField(
+                        notes,
+                        { notes = it },
+                        Modifier.fillMaxWidth(),
+                        label = { Text("Additional notes") },
+                        minLines = 2,
+                    )
+                    ValueLine("Selected devices", selected.size.toString())
+                    ValueLine(
+                        "Kit after save",
+                        when {
+                            awaitingReplacement -> "ADD REPLACEMENT SERIALS"
+                            willBeIncomplete -> "INCOMPLETE"
+                            else -> "COMPLETE"
+                        },
+                        if (awaitingReplacement || willBeIncomplete) DtcRed else SignalGreen,
+                    )
+                    if (incompatible) {
+                        Text("Sub-lock replacements require a mother lock to remain installed.", color = MaterialTheme.colorScheme.error)
+                    }
+                    Button(
+                        onClick = {
+                            val items = listOf("mother", "B", "C", "D")
+                                .filter { it in selected }
+                                .map { position ->
+                                    position to replacements[position].takeIf { modes[position] == "replace" && !it.isNullOrBlank() }
+                                }
+                            model.repairBatch(truck, reason, description, notes, items) {
+                                selected = emptySet()
+                                description = ""
+                                notes = ""
+                            }
+                        },
+                        enabled = ready && !state.working,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                        shape = RoundedCornerShape(7.dp),
+                    ) { Text("CONFIRM ${selected.size} REPAIR OPERATION${if (selected.size == 1) "" else "S"}") }
+                }
             }
         }
         item {
@@ -1880,8 +2072,8 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
                             Text(item.removalReason?.replace('_', ' ') ?: "Reason not recorded", color = MaterialTheme.colorScheme.onSurfaceVariant)
                             item.removalNotes?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
                             if (state.dashboard?.user?.role == "supervisor") FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Button(onClick = { model.triage(item.deviceId, "revived") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = SignalGreen)) { Text("REVIVE") }
-                                OutlinedButton(onClick = { model.triage(item.deviceId, "dead") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, DtcRed), colors = ButtonDefaults.outlinedButtonColors(contentColor = DtcRed)) { Text("DECLARE DEAD") }
+                                Button(onClick = { model.triage(item.deviceId, "revived") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), colors = ButtonDefaults.buttonColors(containerColor = SignalGreen)) { Text("RETURN TO SERVICE") }
+                                OutlinedButton(onClick = { model.triage(item.deviceId, "dead") }, enabled = !state.working, shape = RoundedCornerShape(7.dp), border = BorderStroke(1.dp, DtcRed), colors = ButtonDefaults.outlinedButtonColors(contentColor = DtcRed)) { Text("DECLARE UNUSABLE") }
                             } else Text("Supervisor approval is required for disposition.", color = SafetyAmber)
                         }
                     }
@@ -1889,7 +2081,16 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
             }
         }
     }
-    if (scanDevice) ScannerDialog("affected device", onScanned = { device = it; scanDevice = false }, onDismiss = { scanDevice = false })
+    scanTarget?.let { position ->
+        ScannerDialog(
+            if (position == "mother") "replacement mother" else "replacement sub-lock $position",
+            onScanned = {
+                replacements = replacements + (position to it.uppercase())
+                scanTarget = null
+            },
+            onDismiss = { scanTarget = null },
+        )
+    }
 }
 
 @Composable
@@ -2008,8 +2209,8 @@ private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
                         )
                         OperationAction(
                             icon = Icons.Outlined.HomeRepairService,
-                            title = "Report fault",
-                            detail = "Open Repairs with this asset already selected.",
+                            title = "Remove or replace",
+                            detail = "Open Repairs with this truck and kit already selected.",
                             onClick = model::openRepairsFromLookup,
                         )
                     }
@@ -2065,8 +2266,11 @@ private fun VerifyKitDialog(
     result: LookupSnapshot,
     working: Boolean,
     onDismiss: () -> Unit,
-    onSubmit: (String?, String, List<String>, String, List<String>) -> Unit,
+    onSubmit: (String, String, List<String>, String, List<String>) -> Unit,
 ) {
+    var truck by remember(result.targetId) {
+        mutableStateOf(result.label.takeIf { result.targetKind == "truck" }.orEmpty())
+    }
     var mother by remember(result.targetId) { mutableStateOf(result.mother.orEmpty()) }
     var subs by remember(result.targetId) {
         mutableStateOf(List(3) { index -> result.subs.getOrNull(index)?.second.orEmpty() })
@@ -2074,6 +2278,7 @@ private fun VerifyKitDialog(
     var motherSource by remember(result.targetId) { mutableStateOf("manual") }
     var subSources by remember(result.targetId) { mutableStateOf(List(3) { "manual" }) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
+    val kitComplete = truck.isNotBlank() && mother.isNotBlank() && subs.all { it.isNotBlank() }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -2084,8 +2289,16 @@ private fun VerifyKitDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Text(
-                    "Compare each value with the locks on ${result.label}. Scan any lock whose value has changed.",
+                    "Enter the truck plate, then compare each value with the physical locks. Scan any lock whose value has changed.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    truck,
+                    { truck = it.uppercase() },
+                    Modifier.fillMaxWidth(),
+                    label = { Text("Truck plate") },
+                    placeholder = { Text("FZE998DI") },
+                    singleLine = true,
                 )
                 ScanField("Mother lock", mother, {
                     mother = it.uppercase()
@@ -2103,20 +2316,27 @@ private fun VerifyKitDialog(
                     style = MaterialTheme.typography.bodyMedium,
                     color = SafetyAmber,
                 )
+                if (!kitComplete) {
+                    Text(
+                        "Truck, mother lock and all three sub-locks are required.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
             }
         },
         confirmButton = {
             Button(
                 onClick = {
                     onSubmit(
-                        result.label.takeIf { result.targetKind == "truck" },
+                        truck,
                         mother,
                         subs,
                         motherSource,
                         subSources,
                     )
                 },
-                enabled = mother.isNotBlank() && !working,
+                enabled = kitComplete && !working,
                 shape = RoundedCornerShape(7.dp),
             ) {
                 if (working) {
@@ -2235,6 +2455,19 @@ private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -
                     review.recommendedAction.ifBlank { "Confirm the evidence, then mark the review appropriately." },
                     style = MaterialTheme.typography.bodyMedium,
                 )
+                if (canDecide && review.kind == "sync_conflict") {
+                    Button(
+                        onClick = { action("retry", notes) },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = DtcRed),
+                        shape = RoundedCornerShape(6.dp),
+                    ) { Text("RETRY SAVED OPERATION") }
+                    Text(
+                        "Retry performs the saved install or repair against the current registry. Review the evidence above first.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = SafetyAmber,
+                    )
+                }
                 if (canDecide) {
                     Text(
                         "These decisions close the review only. They do not change the registry or installation record.",
@@ -2948,12 +3181,11 @@ private fun DtcMark(compact: Boolean = false, light: Boolean = false) {
     )
 }
 
-private fun installMessage(truck: String, company: String, mother: String, subs: List<String>) = """Truck: ${truck.uppercase()}
-Serving company: ${company.uppercase()}
-Mother lock: ${mother.uppercase()}
-Sub-lock B: ${subs.getOrNull(0).orEmpty().uppercase()}
-Sub-lock C: ${subs.getOrNull(1).orEmpty().uppercase()}
-Sub-lock D: ${subs.getOrNull(2).orEmpty().uppercase()}"""
+private fun installMessage(truck: String, mother: String, subs: List<String>) = """${truck.trim().uppercase()}
+Master: ${mother.trim().uppercase()}
+C1: ${subs.getOrNull(0).orEmpty().trim().lowercase()}
+C2: ${subs.getOrNull(1).orEmpty().trim().lowercase()}
+C3: ${subs.getOrNull(2).orEmpty().trim().lowercase()}"""
 
 private fun openWhatsApp(context: Context, message: String) {
     val uri = Uri.parse("https://wa.me/?text=${Uri.encode(message)}")

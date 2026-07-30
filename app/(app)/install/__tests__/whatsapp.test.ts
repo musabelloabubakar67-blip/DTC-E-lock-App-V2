@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { buildInstallationWhatsAppMessage, buildInstallationWhatsAppUrl } from '../whatsapp';
 
 const details = {
-  truck: 'FZE 998 DI',
+  truck: 'fze185di',
   company: 'mrs' as const,
-  mother: 'MTR-003892',
-  subs: ['SUB-01', 'SUB-02', 'SUB-03'] as [string, string, string],
+  mother: '487068973097',
+  subs: ['E0817BE15DA8', 'FA7951A73B03', 'D2611F865C82'] as [string, string, string],
 };
 
 describe('installation WhatsApp handover', () => {
@@ -13,12 +13,11 @@ describe('installation WhatsApp handover', () => {
     const message = buildInstallationWhatsAppMessage(details);
 
     expect(message).toBe([
-      'Truck: FZE 998 DI',
-      'Serving company: MRS',
-      'Mother lock: MTR-003892',
-      'Sub-lock B: SUB-01',
-      'Sub-lock C: SUB-02',
-      'Sub-lock D: SUB-03',
+      'FZE185DI',
+      'Master: 487068973097',
+      'C1: e0817be15da8',
+      'C2: fa7951a73b03',
+      'C3: d2611f865c82',
     ].join('\n'));
   });
 
@@ -32,7 +31,7 @@ describe('installation WhatsApp handover', () => {
 
     expect(message).not.toContain('trk_');
     expect(message).not.toContain('dev_');
-    expect(message).toContain('Mother lock: Recorded in E-Lock');
+    expect(message).toContain('Master: Recorded in E-Lock');
   });
 
   it('creates a prefilled WhatsApp URL', () => {

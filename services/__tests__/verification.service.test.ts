@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { eq } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { verifications, slotPairings, devices } from '../../db/schema';
+import { verifications, slotPairings, devices, truckAssignments } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
-import { seedBaseFixtures, createDevice } from '../../tests/helpers/fixtures';
+import { seedBaseFixtures, createDevice, createTruck } from '../../tests/helpers/fixtures';
 import { getTrustState, recordKitVerification } from '../verification.service';
 
 const DAY = 86400;
@@ -39,6 +39,7 @@ function serialOf(db: ReturnType<typeof createTestDb>['db'], deviceId: string): 
 }
 
 function setupKit(db: ReturnType<typeof createTestDb>['db'], orgId: string, installerId: string) {
+  const truckId = createTruck(db, orgId, `T${Math.random().toString(36).slice(2, 8)}`.toUpperCase());
   const motherId = createDevice(db, orgId, {
     type: 'mother',
     serial: `KM${Math.random().toString(36).slice(2, 10)}`.toUpperCase(),
@@ -52,6 +53,16 @@ function setupKit(db: ReturnType<typeof createTestDb>['db'], orgId: string, inst
     }),
   );
   const now = Math.floor(Date.now() / 1000);
+  db.insert(truckAssignments)
+    .values({
+      id: createId(),
+      orgId,
+      truckId,
+      deviceId: motherId,
+      assignedAt: now,
+      assignedBy: installerId,
+    })
+    .run();
   subIds.forEach((subId, i) => {
     db.insert(slotPairings)
       .values({
@@ -65,7 +76,7 @@ function setupKit(db: ReturnType<typeof createTestDb>['db'], orgId: string, inst
       })
       .run();
   });
-  return { motherId, subIds };
+  return { truckId, motherId, subIds };
 }
 
 describe('verification.service — getTrustState decay windows', () => {
@@ -195,11 +206,12 @@ describe('verification.service — recordKitVerification happy path (pass one)',
   it('a kit scanned with one manual sub records weakest_tier=manual even if mother + other subs were qr_scan', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);
-    const { motherId, subIds } = setupKit(db, orgId, installerId);
+    const { truckId, motherId, subIds } = setupKit(db, orgId, installerId);
 
     const result = recordKitVerification(db, {
       orgId,
       actorUserId: installerId,
+      truckId,
       motherSerial: serialOf(db, motherId),
       motherSource: 'qr_scan',
       subs: [
@@ -218,13 +230,14 @@ describe('verification.service — recordKitVerification happy path (pass one)',
   it('a matching kit records result=match and flips trust to verified', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);
-    const { motherId, subIds } = setupKit(db, orgId, installerId);
+    const { truckId, motherId, subIds } = setupKit(db, orgId, installerId);
 
     expect(getTrustState(db, { motherDeviceId: motherId }).state).toBe('unverified');
 
     const matchResult = recordKitVerification(db, {
       orgId,
       actorUserId: installerId,
+      truckId,
       motherSerial: serialOf(db, motherId),
       motherSource: 'qr_scan',
       subs: subIds.map((id) => ({ serial: serialOf(db, id), source: 'qr_scan' as const })),

@@ -10,7 +10,7 @@ import { db } from '../../../db';
 import { recordKitVerificationSchema } from '../../../lib/validations/verification';
 import { recordKitVerification } from '../../../services/verification.service';
 import { requireAuthenticated } from '../../../services/auth.service';
-import { BusinessError, AuthzError } from '../../../lib/errors';
+import { BusinessError, AuthzError, InputError } from '../../../lib/errors';
 
 export async function POST(request: Request) {
   const session = await getServerSession(authOptions);
@@ -39,6 +39,9 @@ export async function POST(request: Request) {
   } catch (error) {
     if (error instanceof AuthzError) {
       return NextResponse.json({ error: { code: 'unauthorized', message: error.message } }, { status: 401 });
+    }
+    if (error instanceof InputError) {
+      return NextResponse.json({ error: { code: 'validation_error', message: error.message } }, { status: 400 });
     }
     if (error instanceof BusinessError) {
       return NextResponse.json({ error: { code: 'business_error', message: error.message } }, { status: 409 });

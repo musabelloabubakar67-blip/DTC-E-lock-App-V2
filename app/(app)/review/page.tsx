@@ -37,7 +37,7 @@ export default function ReviewPage() {
     void reload();
   }, []);
 
-  async function handleAction(reviewId: string, action: 'resolve' | 'dismiss') {
+  async function handleAction(reviewId: string, action: 'resolve' | 'dismiss' | 'retry') {
     setState({ status: 'working', reviewId });
     const result = await submitReviewAction(reviewId, action, notesByReview[reviewId]);
     if (result.status === 'error') {
@@ -191,7 +191,7 @@ function SupervisorReviewCard({
   notes: string;
   working: boolean;
   onNotes: (value: string) => void;
-  onAction: (reviewId: string, action: 'resolve' | 'dismiss') => void;
+  onAction: (reviewId: string, action: 'resolve' | 'dismiss' | 'retry') => void;
 }) {
   return (
     <article className="supervisor-review-card">
@@ -211,6 +211,11 @@ function SupervisorReviewCard({
       </label>
 
       <div className="list-item__actions">
+        {review.kind === 'sync_conflict' && (
+          <button className="btn btn--primary" type="button" disabled={working} onClick={() => onAction(review.id, 'retry')}>
+            Retry operation
+          </button>
+        )}
         <button className="btn btn--primary" type="button" disabled={working} onClick={() => onAction(review.id, 'resolve')}>
           Resolve
         </button>
@@ -224,6 +229,24 @@ function SupervisorReviewCard({
 
 function PayloadSummary({ review }: { review: ConflictReviewListItem }) {
   const payload = review.payload;
+  const presentation = review.presentation;
+
+  if (presentation) {
+    return (
+      <div className="review-detail">
+        <p>{presentation.summary}</p>
+        <dl className="payload-grid">
+          {presentation.details.map((detail) => (
+            <PayloadRow key={`${detail.label}-${detail.value}`} label={detail.label} value={detail.value} />
+          ))}
+        </dl>
+        <p>
+          <strong>What to do: </strong>
+          {presentation.recommendedAction}
+        </p>
+      </div>
+    );
+  }
 
   if (review.kind === 'unlogged_swap') {
     return (
@@ -409,6 +432,7 @@ function invalidMasterlistReasons(row: Record<string, unknown>): string[] {
 }
 
 function primaryLine(review: ConflictReviewListItem): string {
+  if (review.presentation?.title) return review.presentation.title;
   const payload = review.payload;
   if (review.kind === 'sync_conflict') {
     const queuedMutation = payload.queuedMutation as { endpoint?: string } | undefined;

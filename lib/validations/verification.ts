@@ -5,7 +5,7 @@ import { z } from 'zod';
 const verificationTier = z.enum(['qr_scan', 'manual']);
 
 export const recordKitVerificationSchema = z.object({
-  truckId: z.string().trim().min(1).optional(),
+  truckId: z.string().trim().min(1, 'Truck plate is required'),
   motherSerial: z.string().trim().min(1, 'Mother serial is required'),
   motherSource: verificationTier,
   subs: z

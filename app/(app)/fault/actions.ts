@@ -3,6 +3,7 @@
 // write happens BEFORE any network call, and the result the caller gets back reflects only
 // that local write — it must never claim "saved"/"logged" as if the server has it.
 import type { CreateFaultReportFormValues } from '../../../lib/validations/fault';
+import type { RepairBatchFormValues } from '../../../lib/validations/repair';
 import { offlineDb, enqueueMutation } from '../../../lib/offline/db';
 
 export type FaultHistorySummary = { count: number; mostRecentAt: number | null };
@@ -41,5 +42,47 @@ export async function submitFaultReport(
     return { status: 'queued', mutationId: mutation.id };
   } catch {
     return { status: 'error', message: 'Could not save on this device' };
+  }
+}
+
+export type RepairTruckKit = {
+  truckId: string;
+  plate: string;
+  mother: { id: string; serial: string } | null;
+  subs: Array<{ slot: 'B' | 'C' | 'D'; id: string | null; serial: string | null }>;
+};
+
+export async function fetchRepairTruck(truck: string): Promise<RepairTruckKit | null> {
+  const response = await fetch(`/api/lookup-cockpit?query=${encodeURIComponent(truck)}`);
+  if (!response.ok) return null;
+  const body = await response.json().catch(() => null);
+  const data = body?.data;
+  if (data?.target?.kind !== 'truck' || !data.target.id) return null;
+  return {
+    truckId: data.target.id,
+    plate: data.target.label,
+    mother: data.kit?.mother?.id
+      ? { id: data.kit.mother.id, serial: data.kit.mother.serial }
+      : null,
+    subs: Array.isArray(data.kit?.subs)
+      ? data.kit.subs.map((item: { slot: 'B' | 'C' | 'D'; id?: string | null; serial?: string | null }) => ({
+          slot: item.slot,
+          id: item.id ?? null,
+          serial: item.serial ?? null,
+        }))
+      : [],
+  };
+}
+
+export type SubmitRepairResult =
+  | { status: 'queued'; mutationId: string }
+  | { status: 'error'; message: string };
+
+export async function submitRepairBatch(values: RepairBatchFormValues): Promise<SubmitRepairResult> {
+  try {
+    const mutation = await enqueueMutation(offlineDb, { endpoint: '/api/repairs', payload: values });
+    return { status: 'queued', mutationId: mutation.id };
+  } catch {
+    return { status: 'error', message: 'Could not save the repair operation on this device' };
   }
 }

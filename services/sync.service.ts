@@ -10,17 +10,20 @@
 //       break ties between same-device mutations that share a clientTs (same millisecond).
 import { eq } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { ZodError } from 'zod';
 import { devices, syncMutations, conflictReviews, auditLog } from '../db/schema';
-import { BusinessError, AuthzError } from '../lib/errors';
+import { BusinessError, AuthzError, InputError } from '../lib/errors';
 import { createFaultReportSchema } from '../lib/validations/fault';
 import { installKitSchema } from '../lib/validations/installation';
 import { movementActionSchema } from '../lib/validations/movement';
 import { recordKitVerificationSchema } from '../lib/validations/verification';
+import { repairBatchSchema } from '../lib/validations/repair';
 import { createFaultReport } from './fault.service';
 import { recordInstallation } from './installation.service';
 import { dispatchMovementAction } from './movement.service';
 import { applyTriageMovement } from './movement.service';
 import { recordKitVerification } from './verification.service';
+import { executeRepairBatch } from './repair.service';
 import {
   createNativeFaultReport,
   nativeFaultSchema,
@@ -42,7 +45,7 @@ export type IncomingMutation = {
 
 export type MutationOutcome =
   | { id: string; status: 'applied' }
-  | { id: string; status: 'conflicted'; conflictReviewId?: string }
+  | { id: string; status: 'conflicted'; message: string; conflictReviewId?: string }
   | { id: string; status: 'rejected'; message: string };
 
 /**
@@ -89,6 +92,14 @@ function dispatch(db: DbClient, orgId: string, actor: AuthenticatedUser, mutatio
       // state, a different concept from a scan disagreeing with the registry.
       const parsed = recordKitVerificationSchema.parse(mutation.payload);
       return recordKitVerification(db, { orgId, actorUserId: actor.id, ...parsed });
+    }
+    case '/api/repairs': {
+      const parsed = repairBatchSchema.parse(mutation.payload);
+      return executeRepairBatch(db, {
+        orgId,
+        actorUserId: actor.id,
+        repair: parsed,
+      });
     }
     default:
       throw new BusinessError(`Unknown mutation endpoint: ${mutation.endpoint}`);
@@ -168,7 +179,7 @@ function recordConflict(
       })
       .run();
 
-    return { id: mutation.id, status: 'conflicted', conflictReviewId } as const;
+    return { id: mutation.id, status: 'conflicted', conflictReviewId, message: error.message } as const;
   });
 }
 
@@ -234,7 +245,11 @@ function applyOneMutation(
     // find it on /review) the first time; a replay's only job is confirming the status again.
     if (existing.status === 'applied') return { id: mutation.id, status: 'applied' };
     if (existing.status === 'rejected') return { id: mutation.id, status: 'rejected', message: 'Previously rejected' };
-    return { id: mutation.id, status: 'conflicted' };
+    return {
+      id: mutation.id,
+      status: 'conflicted',
+      message: 'This change previously conflicted with the current server record',
+    };
   }
 
   try {
@@ -256,6 +271,18 @@ function applyOneMutation(
     });
   } catch (error) {
     if (error instanceof AuthzError) {
+      return recordRejected(db, orgId, actor, mutation, error.message);
+    }
+    if (error instanceof ZodError) {
+      return recordRejected(
+        db,
+        orgId,
+        actor,
+        mutation,
+        error.issues[0]?.message ?? 'Invalid queued mutation payload',
+      );
+    }
+    if (error instanceof InputError) {
       return recordRejected(db, orgId, actor, mutation, error.message);
     }
     if (error instanceof BusinessError) {

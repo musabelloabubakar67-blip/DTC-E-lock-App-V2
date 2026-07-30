@@ -1,8 +1,9 @@
 import { createId } from '@paralleldrive/cuid2';
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { auditLog, conflictReviews } from '../db/schema';
 import { BusinessError } from '../lib/errors';
 import { requireSupervisor, type AuthenticatedUser } from './auth.service';
+import { applySyncBatch, type MutationOutcome } from './sync.service';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type DbClient = any;
@@ -31,6 +32,7 @@ export function listOpenConflictReviews(db: DbClient, orgId: string): ConflictRe
     .select()
     .from(conflictReviews)
     .where(and(eq(conflictReviews.orgId, orgId), eq(conflictReviews.status, 'open')))
+    .orderBy(desc(conflictReviews.createdAt))
     .all();
 
   return rows.map(
@@ -70,12 +72,62 @@ export function presentConflictReview(
 
   if (kind === 'sync_conflict') {
     const queued = object(payload.queuedMutation);
+    const endpoint = text(queued.endpoint);
+    const operation = object(queued.payload);
+    const reason = text(payload.error) || 'The server could not apply this saved change';
+
+    if (endpoint === '/api/mobile/installations') {
+      const truck = text(operation.truckPlate) || 'Unknown truck';
+      return {
+        title: `Installation for ${truck} was not recorded`,
+        summary: `The scanned installation for ${truck} reached the server, but the assignment was not changed. ${reason}`,
+        details: compactDetails([
+          ['Truck', truck],
+          ['Install type', text(operation.installMode) === 'changed' ? 'Kit change / override' : 'Installation'],
+          ['Serving company', text(operation.company).toUpperCase()],
+          ['Scanned mother', text(operation.motherSerial)],
+          ['Scanned sub-locks', list(operation.subSerials)],
+          ['Why it failed', reason],
+        ]),
+        recommendedAction: 'Check that all four scanned locks are registered and owned by DTC, then repeat Install. A kit-change scan will now move those locks from stale assignments automatically.',
+      };
+    }
+
+    if (endpoint === '/api/repairs') {
+      const truck = text(operation.truck) || 'Unknown truck';
+      return {
+        title: `Repair for ${truck} was not applied`,
+        summary: `The remove/replace operation reached the server, but the installed kit was left unchanged. ${reason}`,
+        details: compactDetails([
+          ['Truck', truck],
+          ['Requested operations', repairOperationList(operation.items)],
+          ['Reason selected', sentence(text(operation.reason))],
+          ['Fault description', text(operation.description)],
+          ['Why it failed', reason],
+        ]),
+        recommendedAction: 'Reload the truck in Repairs and confirm the current serials. For replacement, the new lock must be registered, owned by DTC and available. Repeat the operation after correcting the stated problem.',
+      };
+    }
+
+    if (endpoint === '/api/verifications') {
+      return {
+        title: `Verification for ${text(operation.truckId) || 'a truck'} was not recorded`,
+        summary: `The physical-kit verification reached the server but could not be applied. ${reason}`,
+        details: compactDetails([
+          ['Truck', text(operation.truckId)],
+          ['Scanned mother', text(operation.motherSerial)],
+          ['Why it failed', reason],
+        ]),
+        recommendedAction: 'Reload the truck and repeat the physical verification using the current truck plate and all four lock serials.',
+      };
+    }
+
     return {
       title: 'Offline change could not be applied',
-      summary: 'A change saved on a field device conflicted with newer server data. Nothing was silently overwritten.',
+      summary: `A saved field operation reached the server but was not applied. ${reason}`,
       details: compactDetails([
-        ['Operation', text(queued.endpoint) || 'Offline change'],
-        ['Reason', text(payload.error) || 'The server record changed before sync completed'],
+        ['Operation', endpoint || 'Offline change'],
+        ['Reason', reason],
         ['Saved on device', text(queued.clientTs)],
       ]),
       recommendedAction: 'Check the current truck or kit state, repeat the intended action if it is still required, then mark this review as reviewed.',
@@ -210,6 +262,54 @@ export function dismissConflictReview(db: DbClient, input: TransitionConflictRev
   transitionConflictReview(db, input, 'dismissed');
 }
 
+export function retryConflictReview(
+  db: DbClient,
+  input: TransitionConflictReviewInput,
+): MutationOutcome {
+  requireSupervisor(input.actor);
+
+  const review = db
+    .select()
+    .from(conflictReviews)
+    .where(and(eq(conflictReviews.id, input.reviewId), eq(conflictReviews.orgId, input.actor.orgId)))
+    .get() as { kind: ConflictReviewKind; status: ConflictReviewStatus; payloadJson: string } | undefined;
+  if (!review) throw new BusinessError(`Conflict review ${input.reviewId} not found`);
+  if (review.status !== 'open') throw new BusinessError(`Conflict review ${input.reviewId} is already '${review.status}'`);
+  if (review.kind !== 'sync_conflict') throw new BusinessError('Only failed synced operations can be retried');
+
+  const queued = object(parsePayload(review.payloadJson).queuedMutation);
+  const endpoint = text(queued.endpoint);
+  const payload = queued.payload;
+  if (!endpoint || !payload || typeof payload !== 'object') {
+    throw new BusinessError('This review does not contain a complete operation to retry');
+  }
+
+  const [outcome] = applySyncBatch(db, {
+    orgId: input.actor.orgId,
+    actor: input.actor,
+    mutations: [{
+      id: `${text(queued.id) || input.reviewId}:retry:${createId()}`,
+      endpoint,
+      payload,
+      clientTs: Date.now(),
+      seq: 1,
+    }],
+  });
+
+  if (outcome.status === 'rejected') {
+    throw new BusinessError(outcome.message);
+  }
+
+  const automaticNote = outcome.status === 'applied'
+    ? 'The saved field operation was retried and applied successfully.'
+    : `The retry still could not be applied: ${outcome.message}`;
+  transitionConflictReview(db, {
+    ...input,
+    resolutionNotes: [input.resolutionNotes?.trim(), automaticNote].filter(Boolean).join(' '),
+  }, 'resolved');
+  return outcome;
+}
+
 function parsePayload(raw: string): Record<string, unknown> {
   try {
     const value = JSON.parse(raw);
@@ -233,6 +333,21 @@ function object(value: unknown): Record<string, unknown> {
 
 function list(value: unknown): string {
   return Array.isArray(value) ? value.map(text).filter(Boolean).join(', ') : '';
+}
+
+function repairOperationList(value: unknown): string {
+  if (!Array.isArray(value)) return '';
+  return value
+    .map((entry) => {
+      const item = object(entry);
+      const position = text(item.position);
+      if (!position) return '';
+      const label = position === 'mother' ? 'Mother lock' : `Sub-lock ${position}`;
+      const replacement = text(item.replacementSerial);
+      return replacement ? `${label}: replace with ${replacement}` : `${label}: remove only`;
+    })
+    .filter(Boolean)
+    .join('; ');
 }
 
 function rowSubs(row: Record<string, unknown>): string[] {

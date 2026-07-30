@@ -4,6 +4,12 @@ export type ConflictReviewListItem = {
   kind: 'sync_conflict' | 'unlogged_swap' | 'import_conflict';
   status: 'open' | 'resolved' | 'dismissed';
   payload: Record<string, unknown>;
+  presentation: {
+    title: string;
+    summary: string;
+    details: Array<{ label: string; value: string }>;
+    recommendedAction: string;
+  };
   createdAt: number;
 };
 
@@ -27,7 +33,7 @@ export type SubmitReviewActionResult = { status: 'success' } | { status: 'error'
 
 export async function submitReviewAction(
   reviewId: string,
-  action: 'resolve' | 'dismiss',
+  action: 'resolve' | 'dismiss' | 'retry',
   resolutionNotes?: string,
 ): Promise<SubmitReviewActionResult> {
   try {

@@ -132,6 +132,16 @@ describe('lookup cockpit view model', () => {
 
     expect(view.reviews.map((review) => review.id)).toEqual([reviewId]);
     expect(view.reviews[0].presentation.title).toBe('Physical kit differed from the registry');
+
+    const installView = getLookupCockpit(db, {
+      orgId,
+      query: 'LOOK123',
+      includeDetails: false,
+    });
+    expect(installView.target).toEqual(view.target);
+    expect(installView.kit).toEqual(view.kit);
+    expect(installView.reviews).toEqual([]);
+    expect(installView.audit).toEqual([]);
   });
 
   it('missing audit and sync data render as empty arrays, not production demo rows', () => {

@@ -67,7 +67,7 @@ export default function VerifyPage() {
 
     const scannedSubs = subs.filter((sub) => sub.serial.trim().length > 0);
     const values: RecordKitVerificationFormValues = {
-      truckId: truckId || undefined,
+      truckId,
       motherSerial: mother.serial,
       motherSource: mother.source,
       subs: scannedSubs,
@@ -95,8 +95,13 @@ export default function VerifyPage() {
       <Panel title="Kit scan">
         <form onSubmit={handleSubmit}>
           <label>
-            <span>Truck plate (optional - omit for a depot/off-truck check)</span>
-            <input value={truckId} onChange={(event) => setTruckId(event.target.value)} placeholder="FZE998DI" />
+            <span>Truck plate</span>
+            <input
+              value={truckId}
+              onChange={(event) => setTruckId(event.target.value.toUpperCase())}
+              placeholder="FZE998DI"
+              required
+            />
           </label>
 
           <SourcedInput label="Mother lock" prefix="M" field={mother} onChange={setMother} required />

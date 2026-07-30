@@ -14,7 +14,11 @@ import {
   TrustBanner,
   formatTimestamp,
 } from '../_components/ProductUI';
-import { submitInstallation, type SubmitInstallationResult } from './actions';
+import {
+  submitInstallation,
+  submitInstallationBySerials,
+  type SubmitInstallationResult,
+} from './actions';
 import {
   buildInstallationWhatsAppUrl,
   type InstallationShareDetails,
@@ -87,10 +91,14 @@ export default function InstallPage() {
   const [currentKit, setCurrentKit] = useState<CurrentTruckKit | null>(null);
   const [truckQuery, setTruckQuery] = useState('');
   const [loadedTruckLabel, setLoadedTruckLabel] = useState<string | null>(null);
-  const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'error'>('idle');
+  const [truckLookupState, setTruckLookupState] = useState<'idle' | 'loading' | 'loaded' | 'empty' | 'new' | 'error'>('idle');
   const [showHistoryArchive, setShowHistoryArchive] = useState(false);
   const [shareDetails, setShareDetails] = useState<InstallationShareDetails | null>(null);
   const sharePanelRef = useRef<HTMLElement>(null);
+  const truckLookupRequestRef = useRef(0);
+  const truckLookupAbortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => () => truckLookupAbortRef.current?.abort(), []);
 
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get('archive') === '1') {
@@ -146,14 +154,27 @@ export default function InstallPage() {
         if (cancelled) return;
         setPendingInstalls(
           rows
-            .filter((row) => row.endpoint === '/api/installations')
+            .filter((row) => row.endpoint === '/api/installations' || row.endpoint === '/api/mobile/installations')
             .map((row) => {
-              const payload = row.payload as Partial<InstallKitFormValues> | null;
+              const payload = row.payload as (Partial<InstallKitFormValues> & {
+                truckLabel?: unknown;
+                truckPlate?: unknown;
+                motherSerial?: unknown;
+              }) | null;
+              const serialInstall = row.endpoint === '/api/mobile/installations';
               return {
                 id: row.id,
-                truckId: typeof payload?.truckId === 'string' ? payload.truckId : null,
-                truckLabel: typeof (payload as { truckLabel?: unknown } | null)?.truckLabel === 'string' ? (payload as { truckLabel: string }).truckLabel : null,
-                motherDeviceId: typeof payload?.motherDeviceId === 'string' ? payload.motherDeviceId : null,
+                truckId: !serialInstall && typeof payload?.truckId === 'string' ? payload.truckId : null,
+                truckLabel: serialInstall && typeof payload?.truckPlate === 'string'
+                  ? payload.truckPlate
+                  : typeof payload?.truckLabel === 'string'
+                    ? payload.truckLabel
+                    : null,
+                motherDeviceId: serialInstall && typeof payload?.motherSerial === 'string'
+                  ? payload.motherSerial
+                  : typeof payload?.motherDeviceId === 'string'
+                    ? payload.motherDeviceId
+                    : null,
                 clientTs: row.clientTs,
                 status: 'pending' as const,
               };
@@ -215,7 +236,15 @@ export default function InstallPage() {
       mother: currentKit?.mother.serial ?? form.motherDeviceId,
       subs: (currentKit?.subs.map((sub) => sub.serial) ?? form.subDeviceIds) as [string, string, string],
     };
-    const outcome = await submitInstallation({ ...form, truckLabel: truckDisplayLabel } as InstallKitFormValues & { truckLabel: string });
+    const outcome = sameKitMode
+      ? await submitInstallation({ ...form, truckLabel: truckDisplayLabel } as InstallKitFormValues & { truckLabel: string })
+      : await submitInstallationBySerials({
+          truckPlate: truckDisplayLabel,
+          company: form.company,
+          motherSerial: form.motherDeviceId,
+          subSerials: form.subDeviceIds,
+          checklist: form.checklist,
+        });
     setResult(outcome);
     if (outcome.status === 'queued') {
       setShareDetails(completedInstallation);
@@ -229,26 +258,54 @@ export default function InstallPage() {
   }
 
   async function loadCurrentTruckKit() {
-    const query = truckQuery.trim();
+    const query = truckQuery.trim().toUpperCase();
     if (!query) {
       setResult({ status: 'error', message: 'Enter a truck first.' });
       return;
     }
 
+    truckLookupAbortRef.current?.abort();
+    const controller = new AbortController();
+    truckLookupAbortRef.current = controller;
+    const requestId = ++truckLookupRequestRef.current;
     setTruckLookupState('loading');
     setResult({ status: 'idle' });
 
     try {
-      const response = await fetch(`/api/lookup-cockpit?query=${encodeURIComponent(query)}`, { cache: 'no-store' });
+      const response = await fetch(
+        `/api/lookup-cockpit?query=${encodeURIComponent(query)}&details=minimal`,
+        { cache: 'no-store', signal: controller.signal },
+      );
+      if (requestId !== truckLookupRequestRef.current) return;
       if (!response.ok) throw new Error('lookup_failed');
 
       const payload = (await response.json()) as LookupCockpitResponse;
+      if (requestId !== truckLookupRequestRef.current) return;
       const view = payload.data;
-      if (!view || view.target.kind !== 'truck' || !view.target.id) {
+      if (!view) throw new Error('lookup_failed');
+
+      if (view.target.kind === 'unknown') {
+        const plate = view.target.label || query;
+        setCurrentKit(null);
+        setLoadedTruckLabel(plate);
+        setTruckQuery(plate);
+        setTruckLookupState('new');
+        setForm((current) => ({
+          ...current,
+          installMode: 'changed',
+          truckId: plate,
+          motherDeviceId: '',
+          subDeviceIds: ['', '', ''],
+          company: '' as InstallKitFormValues['company'],
+        }));
+        return;
+      }
+
+      if (view.target.kind !== 'truck' || !view.target.id) {
         setCurrentKit(null);
         setLoadedTruckLabel(null);
         setTruckLookupState('error');
-        setResult({ status: 'error', message: 'Truck was not found. Create or confirm the truck record before install.' });
+        setResult({ status: 'error', message: 'Enter a truck plate rather than a device serial.' });
         return;
       }
       const truckId = view.target.id;
@@ -294,11 +351,15 @@ export default function InstallPage() {
         subDeviceIds: ['', '', ''],
         company: (currentCompany ?? '') as InstallKitFormValues['company'],
       }));
-    } catch {
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return;
+      if (requestId !== truckLookupRequestRef.current) return;
       setCurrentKit(null);
       setLoadedTruckLabel(null);
       setTruckLookupState('error');
       setResult({ status: 'error', message: 'Could not load the truck assignment. Try again or scan the changed kit.' });
+    } finally {
+      if (requestId === truckLookupRequestRef.current) truckLookupAbortRef.current = null;
     }
   }
 
@@ -370,8 +431,12 @@ export default function InstallPage() {
       },
       {
         label: 'Install mode',
-        value: sameKitMode ? 'SAME KIT EVENT' : 'KIT CHANGED / UNKNOWN',
-        tone: sameKitMode ? ('ok' as const) : ('muted' as const),
+        value: sameKitMode
+          ? 'SAME KIT EVENT'
+          : truckLookupState === 'new'
+            ? 'NEW TRUCK / FIRST ASSIGNMENT'
+            : 'KIT CHANGED / UNKNOWN',
+        tone: sameKitMode || truckLookupState === 'new' ? ('ok' as const) : ('muted' as const),
       },
       {
         label: 'Submit state',
@@ -379,7 +444,7 @@ export default function InstallPage() {
         tone: result.status === 'queued' ? ('ok' as const) : result.status === 'error' ? ('danger' as const) : ('muted' as const),
       },
     ],
-    [checklistComplete, form, motherDisplayLabel, result.status, sameKitMode, subLocksDisplayLabel, truckDisplayLabel],
+    [checklistComplete, form, motherDisplayLabel, result.status, sameKitMode, subLocksDisplayLabel, truckDisplayLabel, truckLookupState],
   );
 
   return (
@@ -441,6 +506,8 @@ export default function InstallPage() {
               <input
                 value={truckQuery}
                 onChange={(event) => {
+                  truckLookupAbortRef.current?.abort();
+                  truckLookupRequestRef.current += 1;
                   setTruckQuery(event.target.value);
                   setLoadedTruckLabel(null);
                   setForm({
@@ -461,6 +528,11 @@ export default function InstallPage() {
             </button>
             {truckLookupState === 'loaded' && <p className="empty-state">Current kit loaded. Confirm same kit or mark kit changed.</p>}
             {truckLookupState === 'empty' && <p className="empty-state">No current kit assignment found. Scan the kit for this install.</p>}
+            {truckLookupState === 'new' && (
+              <p className="banner banner--ok">
+                New truck. Scan its first kit; the truck and assignment will be created when this installation syncs.
+              </p>
+            )}
             <label>
               {/* §6: ALWAYS shown, ALWAYS required — pre-filled by loadCurrentTruckKit when a
                   declaration exists, blank otherwise. The tech confirms (leaves) or changes it. */}

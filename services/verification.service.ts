@@ -16,7 +16,7 @@ import {
   conflictReviews,
   auditLog,
 } from '../db/schema';
-import { BusinessError } from '../lib/errors';
+import { BusinessError, InputError } from '../lib/errors';
 import { VERIFY_DECAY_SCAN_DAYS, VERIFY_DECAY_PHOTO_DAYS } from '../constants';
 import { applyRemoval, markInService } from './lifecycle.service';
 
@@ -793,7 +793,12 @@ export function recordKitVerification(
   input: RecordKitVerificationInput,
 ): RecordKitVerificationResult {
   const truck = resolveTruckIdentifier(db, input.orgId, input.truckId);
-  const normalizedInput = truck ? { ...input, truckId: truck.id } : input;
+  if (!truck) {
+    throw new InputError(
+      `Truck ${input.truckId?.trim() || '(missing)'} is not registered. Use Install to create its first assignment.`,
+    );
+  }
+  const normalizedInput = { ...input, truckId: truck.id };
   const motherSerial = normalizeSerial(input.motherSerial);
 
   const existingMotherDevice = db

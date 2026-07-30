@@ -82,6 +82,7 @@ export type InstallationHistoryItem = {
   subSerials: string[];
   overallStatus: InstallationChecklist['overallStatus'] | null;
   actorName: string | null;
+  company: TruckCompany | null;
 };
 
 export type InstallationHistoryPage = {
@@ -398,6 +399,37 @@ export function listInstallationHistory(db: DbClient, orgId: string, limit?: num
     .all() as Array<{ id: string; displayName: string }>;
   const actorNameById = new Map(userRows.map((user) => [user.id, user.displayName]));
 
+  const companyRows = db
+    .select({
+      truckId: truckCompanyAssignments.truckId,
+      company: truckCompanyAssignments.company,
+      assignedAt: truckCompanyAssignments.assignedAt,
+      removedAt: truckCompanyAssignments.removedAt,
+    })
+    .from(truckCompanyAssignments)
+    .where(eq(truckCompanyAssignments.orgId, orgId))
+    .all() as Array<{
+      truckId: string;
+      company: TruckCompany;
+      assignedAt: number;
+      removedAt: number | null;
+    }>;
+
+  function companyAt(truckId: string, loggedDate: number): TruckCompany | null {
+    const historical = companyRows
+      .filter((row) =>
+        row.truckId === truckId &&
+        row.assignedAt <= loggedDate &&
+        (row.removedAt === null || row.removedAt >= loggedDate),
+      )
+      .sort((a, b) => b.assignedAt - a.assignedAt)[0];
+    if (historical) return historical.company;
+
+    return companyRows
+      .filter((row) => row.truckId === truckId && row.removedAt === null)
+      .sort((a, b) => b.assignedAt - a.assignedAt)[0]?.company ?? null;
+  }
+
   return visibleRows.map((row) => {
     const pairedAt = assignedAtByAssignmentId.get(row.assignmentId) ?? row.loggedDate;
     const reconstructedSubSerials = (subIdsByMotherAndPairedAt.get(`${row.motherDeviceId}:${pairedAt}`) ?? [])
@@ -414,6 +446,7 @@ export function listInstallationHistory(db: DbClient, orgId: string, limit?: num
       subSerials,
       overallStatus: row.overallStatus,
       actorName: actorNameById.get(row.actorUserId) ?? null,
+      company: companyAt(row.truckId, row.loggedDate),
     };
   });
 }
@@ -434,6 +467,7 @@ export function listInstallationHistoryPage(
           row.subSerials.join(' '),
           row.overallStatus ?? '',
           row.actorName ?? '',
+          row.company ?? '',
           new Date(row.loggedDate * 1000).toISOString(),
           formatSearchTimestamp(row.loggedDate),
         ].join(' ').toLowerCase();

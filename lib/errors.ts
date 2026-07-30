@@ -12,6 +12,13 @@ export class AuthzError extends Error {
   }
 }
 
+export class InputError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'InputError';
+  }
+}
+
 /**
  * Exhaustiveness guard for discriminated unions consumed via switch. TypeScript refuses to
  * compile a call site that hasn't handled every member of the union (the `never` parameter

@@ -4,7 +4,12 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '../../../lib/auth';
 import { db } from '../../../db';
-import { listOpenConflictReviews, resolveConflictReview, dismissConflictReview } from '../../../services/review.service';
+import {
+  listOpenConflictReviews,
+  resolveConflictReview,
+  dismissConflictReview,
+  retryConflictReview,
+} from '../../../services/review.service';
 import { requireAuthenticated } from '../../../services/auth.service';
 import { BusinessError, AuthzError } from '../../../lib/errors';
 
@@ -32,11 +37,25 @@ export async function POST(request: Request) {
 
     const body = await request.json();
     const { reviewId, action, resolutionNotes } = body ?? {};
-    if (!reviewId || (action !== 'resolve' && action !== 'dismiss')) {
+    if (!reviewId || (action !== 'resolve' && action !== 'dismiss' && action !== 'retry')) {
       return NextResponse.json(
-        { error: { code: 'validation_error', message: 'reviewId and action ("resolve"|"dismiss") are required' } },
+        { error: { code: 'validation_error', message: 'reviewId and action ("resolve"|"dismiss"|"retry") are required' } },
         { status: 400 },
       );
+    }
+
+    if (action === 'retry') {
+      const retry = retryConflictReview(db, { reviewId, actor: user, resolutionNotes });
+      return NextResponse.json({
+        data: {
+          reviewId,
+          status: 'resolved',
+          retryStatus: retry.status,
+          message: retry.status === 'applied'
+            ? 'The saved operation was applied successfully'
+            : `The retry still could not be applied: ${retry.message}`,
+        },
+      });
     }
 
     if (action === 'resolve') {

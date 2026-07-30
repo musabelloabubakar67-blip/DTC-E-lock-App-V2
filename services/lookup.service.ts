@@ -30,6 +30,7 @@ export type RepairPoolItem = {
 export type LookupCockpitQuery = {
   query: string;
   orgId: string;
+  includeDetails?: boolean;
 };
 
 export type LookupCockpitViewModel = {
@@ -316,7 +317,7 @@ export function getLookupCockpit(db: DbClient, input: LookupCockpitQuery): Looku
         : emptyTrust();
 
   const kit = buildKit(db, target.mother, trust);
-  const references = buildLookupReferences(target, kit);
+  const references = input.includeDetails === false ? new Set<string>() : buildLookupReferences(target, kit);
 
   return {
     target: {
@@ -327,9 +328,9 @@ export function getLookupCockpit(db: DbClient, input: LookupCockpitQuery): Looku
     company: target.kind === 'truck' && target.truckId ? getCurrentTruckCompany(db, target.truckId) : { value: null, declared: false },
     trust,
     kit,
-    reviews: listOpenConflictReviewsForTarget(db, input.orgId, references),
+    reviews: input.includeDetails === false ? [] : listOpenConflictReviewsForTarget(db, input.orgId, references),
     sync: { pendingCount: 0, items: [] },
-    audit: listLatestAudit(db, input.orgId, references),
+    audit: input.includeDetails === false ? [] : listLatestAudit(db, input.orgId, references),
   };
 }
 

@@ -1,10 +1,15 @@
 import { describe, it, expect } from 'vitest';
-import { eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { conflictReviews, devices, truckAssignments, auditLog, organisations, users } from '../../db/schema';
+import { conflictReviews, devices, truckAssignments, auditLog, organisations, users, trucks } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
-import { listOpenConflictReviews, resolveConflictReview, dismissConflictReview } from '../review.service';
+import {
+  listOpenConflictReviews,
+  resolveConflictReview,
+  dismissConflictReview,
+  retryConflictReview,
+} from '../review.service';
 import { applySyncBatch, type IncomingMutation } from '../sync.service';
 import { AuthzError } from '../../lib/errors';
 
@@ -79,6 +84,31 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     expect(reviews.length).toBe(1); // the unlogged_swap one still lists fine
   });
 
+  it('lists the newest open review first', () => {
+    const { db } = createTestDb();
+    const { orgId } = seedBaseFixtures(db);
+    const older = createId();
+    const newer = createId();
+    db.insert(conflictReviews).values({
+      id: older,
+      orgId,
+      kind: 'unlogged_swap',
+      payloadJson: '{}',
+      status: 'open',
+      createdAt: 100,
+    }).run();
+    db.insert(conflictReviews).values({
+      id: newer,
+      orgId,
+      kind: 'unlogged_swap',
+      payloadJson: '{}',
+      status: 'open',
+      createdAt: 200,
+    }).run();
+
+    expect(listOpenConflictReviews(db, orgId).map((review) => review.id)).toEqual([newer, older]);
+  });
+
   it('both resolve and dismiss throw for a non-supervisor', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);
@@ -145,5 +175,56 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     expect(payload.queuedMutation.id).toBe('rc-2');
     expect(payload.currentServerState).toBeTruthy();
     expect(typeof payload.error).toBe('string');
+  });
+
+  it('retries a preserved failed new-truck installation and resolves its original review', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    createDevice(db, orgId, { type: 'mother', serial: 'RETRY-MOTHER-1', status: 'available' });
+    ['RETRY-SUB-B', 'RETRY-SUB-C', 'RETRY-SUB-D'].forEach((serial) => {
+      createDevice(db, orgId, { type: 'sub', serial, status: 'available' });
+    });
+
+    const reviewId = openReview(db, orgId, 'sync_conflict', {
+      queuedMutation: {
+        id: 'failed-new-truck',
+        endpoint: '/api/mobile/installations',
+        payload: {
+          truckPlate: 'FZE656DI',
+          company: 'mrs',
+          motherSerial: 'RETRY-MOTHER-1',
+          subSerials: ['RETRY-SUB-B', 'RETRY-SUB-C', 'RETRY-SUB-D'],
+          installMode: 'changed',
+          checklist: {
+            deviceResponsive: 'yes',
+            sublocksResponsive: 'yes',
+            configConfirmed: 'yes',
+            overallStatus: 'successful',
+          },
+        },
+        clientTs: 1,
+        seq: 1,
+      },
+      error: 'Truck FZE656DI was not found',
+    });
+
+    const outcome = retryConflictReview(db, {
+      reviewId,
+      actor: { id: supervisorId, orgId, role: 'supervisor' },
+      resolutionNotes: 'Recovered from preserved field scan.',
+    });
+
+    expect(outcome.status).toBe('applied');
+    expect(db.select().from(conflictReviews).where(eq(conflictReviews.id, reviewId)).get()!.status).toBe('resolved');
+    const truck = db.select().from(trucks).where(eq(trucks.plate, 'FZE656DI')).get()!;
+    expect(
+      db
+        .select()
+        .from(truckAssignments)
+        .where(and(eq(truckAssignments.truckId, truck.id), isNull(truckAssignments.removedAt)))
+        .get(),
+    ).toBeTruthy();
+    expect(db.select().from(conflictReviews).where(eq(conflictReviews.status, 'open')).all()).toHaveLength(0);
+    expect(db.select().from(auditLog).where(eq(auditLog.entityId, reviewId)).all()).not.toHaveLength(0);
   });
 });

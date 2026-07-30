@@ -13,9 +13,16 @@ export async function GET(request: Request) {
     const user = requireAuthenticated(
       session?.user ? { id: session.user.id, orgId: session.user.orgId, role: session.user.role } : null,
     );
-    const query = new URL(request.url).searchParams.get('query') ?? '';
+    const params = new URL(request.url).searchParams;
+    const query = params.get('query') ?? '';
 
-    return NextResponse.json({ data: getLookupCockpit(db, { query, orgId: user.orgId }) });
+    return NextResponse.json({
+      data: getLookupCockpit(db, {
+        query,
+        orgId: user.orgId,
+        includeDetails: params.get('details') !== 'minimal',
+      }),
+    });
   } catch (error) {
     if (error instanceof AuthzError) {
       return NextResponse.json({ error: { code: 'unauthorized', message: error.message } }, { status: 401 });

@@ -63,6 +63,7 @@ data class InstallationItem(
     val actor: String,
     val id: String = "",
     val loggedDate: Long = 0,
+    val company: String = "Not declared",
 )
 data class ReviewDetail(val label: String, val value: String)
 data class ReviewItem(
@@ -120,7 +121,17 @@ data class LookupSnapshot(
     val reviewItems: List<ReviewItem> = emptyList(),
     val pendingSyncCount: Int = 0,
 )
-data class NativeSyncResult(val pending: Int, val applied: Int, val reachedServer: Boolean)
+data class NativeSyncResult(
+    val pending: Int,
+    val applied: Int,
+    val reachedServer: Boolean,
+    val submittedStatus: String? = null,
+    val submittedMessage: String? = null,
+    val submittedReviewId: String? = null,
+) {
+    val submittedApplied: Boolean
+        get() = submittedStatus == "applied"
+}
 
 private data class PendingNativeMutation(
     val id: String,
@@ -204,9 +215,14 @@ class DtcApi(private val context: Context) {
                 val item = rows.getJSONObject(index)
                 add(
                     InstallationItem(
-                        item.optString("truckLabel", "-"), item.optString("motherSerial", "-"), item.optJSONArray("subSerials").strings(),
-                        item.nullableString("overallStatus") ?: "Recorded", item.nullableString("actorName") ?: "-",
-                        item.optString("id"), item.optLong("loggedDate"),
+                        truck = item.optString("truckLabel", "-"),
+                        mother = item.optString("motherSerial", "-"),
+                        subs = item.optJSONArray("subSerials").strings(),
+                        status = item.nullableString("overallStatus") ?: "Recorded",
+                        actor = item.nullableString("actorName") ?: "-",
+                        id = item.optString("id"),
+                        loggedDate = item.optLong("loggedDate"),
+                        company = item.nullableString("company")?.uppercase() ?: "Not declared",
                     ),
                 )
             }
@@ -267,8 +283,9 @@ class DtcApi(private val context: Context) {
         )
     }
 
-    suspend fun lookup(query: String): LookupSnapshot = withContext(Dispatchers.IO) {
-        val data = get("/api/lookup-cockpit?query=${query.encoded()}").getJSONObject("data")
+    suspend fun lookup(query: String, minimal: Boolean = false): LookupSnapshot = withContext(Dispatchers.IO) {
+        val detailMode = if (minimal) "&details=minimal" else ""
+        val data = get("/api/lookup-cockpit?query=${query.encoded()}$detailMode").getJSONObject("data")
         val kit = data.getJSONObject("kit")
         val subRows = kit.getJSONArray("subs")
         val reviews = data.optJSONArray("reviews").reviewItems()
@@ -304,20 +321,27 @@ class DtcApi(private val context: Context) {
     }
 
     suspend fun reviews(): List<ReviewItem> = withContext(Dispatchers.IO) {
-        get("/api/reviews").getJSONArray("data").reviewItems()
+        get("/api/reviews").getJSONArray("data").reviewItems().sortedByDescending { it.createdAt }
     }
 
     suspend fun verifyKit(
-        truckPlate: String?,
+        truckPlate: String,
         motherSerial: String,
         subSerials: List<String>,
         motherSource: String,
         subSources: List<String>,
     ): NativeSyncResult = withContext(Dispatchers.IO) {
+        val target = lookup(truckPlate)
+        if (target.targetKind != "truck" || target.targetId == null) {
+            throw ApiException(
+                "Truck ${truckPlate.uppercase()} is not registered. Use Install to create its first assignment.",
+                400,
+            )
+        }
         enqueueAndSync(
             "/api/verifications",
             JSONObject()
-                .putOptional("truckId", truckPlate)
+                .put("truckId", truckPlate)
                 .put("motherSerial", motherSerial)
                 .put("motherSource", motherSource)
                 .put("subs", JSONArray().apply {
@@ -325,6 +349,32 @@ class DtcApi(private val context: Context) {
                         if (serial.isNotBlank()) {
                             put(JSONObject().put("serial", serial).put("source", subSources.getOrNull(index) ?: "manual"))
                         }
+                    }
+                }),
+        )
+    }
+
+    suspend fun repairBatch(
+        truckPlate: String,
+        reason: String,
+        description: String,
+        notes: String,
+        items: List<Pair<String, String?>>,
+    ): NativeSyncResult = withContext(Dispatchers.IO) {
+        enqueueAndSync(
+            "/api/repairs",
+            JSONObject()
+                .put("truck", truckPlate.uppercase())
+                .put("reason", reason)
+                .put("description", description)
+                .putOptional("notes", notes.takeIf { it.isNotBlank() })
+                .put("items", JSONArray().apply {
+                    items.forEach { (position, replacementSerial) ->
+                        put(
+                            JSONObject()
+                                .put("position", position)
+                                .putOptional("replacementSerial", replacementSerial?.takeIf { it.isNotBlank() }?.uppercase()),
+                        )
                     }
                 }),
         )
@@ -433,8 +483,9 @@ class DtcApi(private val context: Context) {
         }
     }
 
-    suspend fun reviewAction(id: String, action: String, notes: String) = withContext(Dispatchers.IO) {
-        post("/api/reviews", JSONObject().put("reviewId", id).put("action", action).put("resolutionNotes", notes))
+    suspend fun reviewAction(id: String, action: String, notes: String): String = withContext(Dispatchers.IO) {
+        val response = post("/api/reviews", JSONObject().put("reviewId", id).put("action", action).put("resolutionNotes", notes))
+        response.optJSONObject("data")?.optString("message").orEmpty()
     }
 
     suspend fun changePassword(current: String, next: String, confirm: String) = withContext(Dispatchers.IO) {
@@ -485,17 +536,33 @@ class DtcApi(private val context: Context) {
     @Synchronized
     private fun enqueueAndSync(endpoint: String, payload: JSONObject): NativeSyncResult {
         val nextSeq = mutationStore.getLong(MUTATION_SEQ, 0L) + 1L
+        val mutationId = UUID.randomUUID().toString()
         val pending = readMutations().toMutableList().apply {
-            add(PendingNativeMutation(UUID.randomUUID().toString(), endpoint, JSONObject(payload.toString()), System.currentTimeMillis(), nextSeq))
+            add(PendingNativeMutation(mutationId, endpoint, JSONObject(payload.toString()), System.currentTimeMillis(), nextSeq))
         }
         writeMutations(pending, nextSeq)
-        return syncPendingBlocking()
+        val result = syncPendingBlocking(mutationId)
+        if (result.submittedStatus == "conflicted" || result.submittedStatus == "rejected") {
+            throw ApiException(
+                result.submittedMessage ?: "This change could not be applied to the current server record",
+                409,
+            )
+        }
+        return result
     }
 
     @Synchronized
-    private fun syncPendingBlocking(): NativeSyncResult {
-        val pending = readMutations()
-        if (pending.isEmpty()) return NativeSyncResult(0, 0, true)
+    private fun syncPendingBlocking(submittedMutationId: String? = null): NativeSyncResult {
+        val stored = readMutations()
+        val pending = stored.filter { it.hasKnownVerificationTruck() }
+        if (pending.size != stored.size) writeMutations(pending)
+        if (pending.isEmpty()) return NativeSyncResult(
+            pending = 0,
+            applied = 0,
+            reachedServer = true,
+            submittedStatus = submittedMutationId?.let { "rejected" },
+            submittedMessage = submittedMutationId?.let { "The queued change was incomplete and was not sent" },
+        )
         return try {
             val batch = JSONArray()
             pending.sortedWith(compareBy<PendingNativeMutation> { it.clientTs }.thenBy { it.seq }).forEach { mutation ->
@@ -505,22 +572,51 @@ class DtcApi(private val context: Context) {
             val response = post("/api/sync", JSONObject().put("mutations", batch))
             val results = response.optJSONArray("results") ?: JSONArray()
             val applied = mutableSetOf<String>()
+            val terminal = mutableSetOf<String>()
+            var submittedStatus: String? = null
+            var submittedMessage: String? = null
+            var submittedReviewId: String? = null
             for (index in 0 until results.length()) {
                 val result = results.getJSONObject(index)
-                if (result.optString("status") == "applied") applied += result.optString("id")
+                val id = result.optString("id")
+                val status = result.optString("status")
+                if (id == submittedMutationId) {
+                    submittedStatus = status
+                    submittedMessage = result.nullableString("message")
+                    submittedReviewId = result.nullableString("conflictReviewId")
+                }
+                when (status) {
+                    "applied" -> {
+                        applied += id
+                        terminal += id
+                    }
+                    "conflicted", "rejected" -> terminal += id
+                }
             }
-            val remaining = pending.filterNot { it.id in applied }
+            val remaining = pending.filterNot { it.id in terminal }
             writeMutations(remaining)
-            NativeSyncResult(remaining.size, applied.size, true)
+            NativeSyncResult(
+                pending = remaining.size,
+                applied = applied.size,
+                reachedServer = true,
+                submittedStatus = submittedStatus ?: submittedMutationId?.let { "pending" },
+                submittedMessage = submittedMessage,
+                submittedReviewId = submittedReviewId,
+            )
         } catch (_: Exception) {
-            NativeSyncResult(pending.size, 0, false)
+            NativeSyncResult(
+                pending = pending.size,
+                applied = 0,
+                reachedServer = false,
+                submittedStatus = submittedMutationId?.let { "pending" },
+            )
         }
     }
 
     @Synchronized
     private fun readMutations(): List<PendingNativeMutation> = try {
         val rows = JSONArray(mutationStore.getString(MUTATION_ROWS, "[]") ?: "[]")
-        buildList {
+        val parsed = buildList {
             for (index in 0 until rows.length()) rows.getJSONObject(index).let { row ->
                 add(PendingNativeMutation(
                     row.getString("id"), row.getString("endpoint"), row.getJSONObject("payload"),
@@ -528,9 +624,35 @@ class DtcApi(private val context: Context) {
                 ))
             }
         }
+        val valid = parsed.filter { it.isLocallyValid() }
+        if (valid.size != parsed.size) writeMutations(valid)
+        valid
     } catch (_: Exception) {
         mutationStore.edit().putString(MUTATION_ROWS, "[]").apply()
         emptyList()
+    }
+
+    private fun PendingNativeMutation.isLocallyValid(): Boolean {
+        if (endpoint != "/api/verifications") return true
+        val subs = payload.optJSONArray("subs") ?: return false
+        return payload.optString("truckId").isNotBlank() &&
+            payload.optString("motherSerial").isNotBlank() &&
+            subs.length() == 3 &&
+            (0 until subs.length()).all { index ->
+                subs.optJSONObject(index)?.optString("serial").orEmpty().isNotBlank()
+            }
+    }
+
+    private fun PendingNativeMutation.hasKnownVerificationTruck(): Boolean {
+        if (endpoint != "/api/verifications") return true
+        return try {
+            val target = get("/api/lookup-cockpit?query=${payload.optString("truckId").encoded()}")
+                .getJSONObject("data")
+                .getJSONObject("target")
+            target.optString("kind") == "truck" && target.nullableString("id") != null
+        } catch (_: Exception) {
+            true
+        }
     }
 
     @Synchronized
@@ -705,12 +827,59 @@ private fun localReviewPresentation(kind: String, payload: JSONObject): NativeRe
 
     if (kind == "sync_conflict") {
         val queued = payload.optJSONObject("queuedMutation") ?: JSONObject()
+        val endpoint = queued.reviewText("endpoint")
+        val operation = queued.optJSONObject("payload") ?: JSONObject()
+        val reason = payload.reviewText("error").ifBlank { "The server could not apply this saved change" }
+        if (endpoint == "/api/mobile/installations") {
+            val truck = operation.reviewText("truckPlate").ifBlank { "Unknown truck" }
+            return NativeReviewPresentation(
+                title = "Installation for $truck was not recorded",
+                summary = "The scanned installation reached the server, but the assignment was not changed. $reason",
+                details = reviewDetails(
+                    "Truck" to truck,
+                    "Install type" to if (operation.reviewText("installMode") == "changed") "Kit change / override" else "Installation",
+                    "Serving company" to operation.reviewText("company").uppercase(),
+                    "Scanned mother" to operation.reviewText("motherSerial"),
+                    "Scanned sub-locks" to operation.reviewList("subSerials"),
+                    "Why it failed" to reason,
+                ),
+                recommendedAction = "Check that all four locks are registered and owned by DTC, then repeat Install. A kit-change scan moves locks from stale assignments automatically.",
+            )
+        }
+        if (endpoint == "/api/repairs") {
+            val truck = operation.reviewText("truck").ifBlank { "Unknown truck" }
+            return NativeReviewPresentation(
+                title = "Repair for $truck was not applied",
+                summary = "The remove/replace operation reached the server, but the installed kit was left unchanged. $reason",
+                details = reviewDetails(
+                    "Truck" to truck,
+                    "Requested operations" to operation.reviewRepairOperations(),
+                    "Reason selected" to operation.reviewText("reason").replace('_', ' '),
+                    "Fault description" to operation.reviewText("description"),
+                    "Why it failed" to reason,
+                ),
+                recommendedAction = "Reload the truck in Repairs and confirm its current serials. A replacement lock must be registered, owned by DTC and available before retrying.",
+            )
+        }
+        if (endpoint == "/api/verifications") {
+            val truck = operation.reviewText("truckId").ifBlank { "the selected truck" }
+            return NativeReviewPresentation(
+                title = "Verification for $truck was not recorded",
+                summary = "The physical-kit verification reached the server but could not be applied. $reason",
+                details = reviewDetails(
+                    "Truck" to truck,
+                    "Scanned mother" to operation.reviewText("motherSerial"),
+                    "Why it failed" to reason,
+                ),
+                recommendedAction = "Reload the truck and repeat verification using the current plate and all four lock serials.",
+            )
+        }
         return NativeReviewPresentation(
             title = "Offline change could not be applied",
-            summary = "A field-device change conflicted with newer server data. Nothing was silently overwritten.",
+            summary = "A saved field operation reached the server but was not applied. $reason",
             details = reviewDetails(
-                "Operation" to queued.reviewText("endpoint").ifBlank { "Offline change" },
-                "Reason" to payload.reviewText("error").ifBlank { "The server record changed before sync completed" },
+                "Operation" to endpoint.ifBlank { "Offline change" },
+                "Reason" to reason,
                 "Saved on device" to queued.reviewText("clientTs"),
             ),
             recommendedAction = "Check the current truck or kit state and repeat the intended action if it is still required.",
@@ -821,6 +990,20 @@ private fun JSONObject.reviewList(key: String): String {
             values.optString(index).trim().takeIf(String::isNotBlank)?.let(::add)
         }
     }.joinToString(", ")
+}
+
+private fun JSONObject.reviewRepairOperations(): String {
+    val values = optJSONArray("items") ?: return ""
+    return buildList {
+        for (index in 0 until values.length()) {
+            val item = values.optJSONObject(index) ?: continue
+            val position = item.optString("position")
+            if (position.isBlank()) continue
+            val label = if (position == "mother") "Mother lock" else "Sub-lock $position"
+            val replacement = item.optString("replacementSerial")
+            add(if (replacement.isBlank()) "$label: remove only" else "$label: replace with $replacement")
+        }
+    }.joinToString("; ")
 }
 
 private fun JSONObject.reviewValues(vararg keys: String): List<String> =

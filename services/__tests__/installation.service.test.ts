@@ -89,6 +89,7 @@ describe('installation.service', () => {
         subSerials: ['HISTORY-SUB-B', 'HISTORY-SUB-C', 'HISTORY-SUB-D'],
         overallStatus: 'successful',
         actorName: 'Inst',
+        company: 'mrs',
       }),
     ]);
   });

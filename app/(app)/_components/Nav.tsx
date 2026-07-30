@@ -34,9 +34,7 @@ const SETTINGS_LINK: NavLink = { href: '/settings', label: 'Settings', icon: 'se
 export default function Nav({ role }: { role: NavRole }) {
   const pathname = usePathname();
 
-  const roleLinks = INSTALLER_LINKS.map((link) =>
-    role === 'supervisor' && link.label === 'Repairs' ? { ...link, href: '/triage' } : link,
-  );
+  const roleLinks = INSTALLER_LINKS;
   const links = role === 'supervisor'
     ? [...roleLinks, ...SUPERVISOR_ONLY_LINKS, SETTINGS_LINK]
     : [...roleLinks, SETTINGS_LINK];

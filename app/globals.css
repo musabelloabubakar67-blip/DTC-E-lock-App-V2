@@ -6382,3 +6382,144 @@ button:active,
     margin-inline: 12px;
   }
 }
+/* Unified repair operations */
+.repair-workbench {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.repair-truck-loader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.repair-device-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.repair-device {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+}
+
+.repair-device--selected {
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
+.repair-device__select {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 8px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+
+.repair-device__select strong {
+  grid-column: 2;
+  overflow-wrap: anywhere;
+}
+
+.repair-operation-list {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.repair-operation-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(150px, 0.4fr) minmax(420px, 1.4fr);
+  gap: 12px;
+  align-items: end;
+  padding: 12px;
+  border: 1px solid var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
+  background: var(--surface);
+}
+
+.repair-operation-row__device {
+  display: grid;
+  gap: 5px;
+  align-self: center;
+}
+
+.repair-operation-row__device span,
+.repair-operation-row__notice {
+  color: var(--color-text-dim);
+}
+
+.repair-operation-row__device strong {
+  overflow-wrap: anywhere;
+}
+
+.repair-operation-row__notice {
+  align-self: center;
+  margin: 0;
+}
+
+.repair-detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(280px, 0.65fr);
+  gap: 12px;
+}
+
+.repair-submit {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.repair-pool-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+@media (max-width: 1100px) {
+  .repair-device-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .repair-operation-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .repair-operation-row .scan-input-row,
+  .repair-operation-row__notice {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 900px) {
+  .repair-truck-loader,
+  .repair-detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 720px) {
+  .repair-truck-loader,
+  .repair-device-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .repair-truck-loader .btn {
+    width: 100%;
+  }
+
+  .repair-operation-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .fault-cockpit .industrial-page-head h1 {
+    font-size: 36px;
+  }
+}

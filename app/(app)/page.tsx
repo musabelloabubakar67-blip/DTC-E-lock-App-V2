@@ -29,7 +29,6 @@ const INSTALLER_ACTIONS = [
 
 const SUPERVISOR_ACTIONS = [
   { href: '/review', label: 'Review', icon: 'review' },
-  { href: '/triage', label: 'Repair queue', icon: 'triage' },
 ];
 
 export default async function HomePage() {
@@ -168,7 +167,7 @@ export default async function HomePage() {
           </section>
 
           <section className="dd-panel">
-            <PanelTitle title="Repair queue" href="/triage" />
+            <PanelTitle title="Repair pool" href="/fault" />
             <div className="dd-feed">
               {dashboard.repairPool.length === 0 && <Empty label="No devices are waiting in repair." />}
               {dashboard.repairPool.slice(0, 5).map((device) => (

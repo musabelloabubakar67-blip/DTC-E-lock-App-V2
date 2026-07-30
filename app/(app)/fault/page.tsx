@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { offlineDb } from '../../../lib/offline/db';
-import type { CreateFaultReportFormValues } from '../../../lib/validations/fault';
+import type { RepairBatchFormValues } from '../../../lib/validations/repair';
 import {
   Badge,
   DataTable,
@@ -10,451 +10,321 @@ import {
   Panel,
   ScanInputRow,
   StatusList,
-  TrustBanner,
 } from '../_components/ProductUI';
 import {
-  fetchFaultHistory,
-  fetchSupervisors,
-  submitFaultReport,
-  type FaultHistorySummary,
-  type Supervisor,
+  fetchRepairTruck,
+  submitRepairBatch,
+  type RepairTruckKit,
 } from './actions';
+import {
+  fetchRepairPool,
+  submitTriage,
+  type RepairPoolItem,
+} from '../triage/actions';
+import { useAppRole } from '../_components/AppShell';
 
-type FaultHistoryState = { status: 'idle' } | { status: 'loading' } | { status: 'ready'; data: FaultHistorySummary } | { status: 'error' };
+type Position = 'mother' | 'B' | 'C' | 'D';
+type PositionMode = 'replace' | 'remove';
 
-type PendingFault = {
-  id: string;
-  truckId: string | null;
-  deviceId: string | null;
-  faultType: string | null;
-  clientTs: number;
-  status: 'pending';
-};
+const positions: Position[] = ['mother', 'B', 'C', 'D'];
 
-const emptyForm: CreateFaultReportFormValues = {
-  truckId: '',
-  deviceId: '',
-  locksAffected: [],
-  description: '',
-};
-
-const lockOptions = ['MOTHER', 'B', 'C', 'D'] as const;
-
-export default function FaultPage() {
-  const [form, setForm] = useState<CreateFaultReportFormValues>(emptyForm);
-  const [history, setHistory] = useState<FaultHistoryState>({ status: 'idle' });
-  const [supervisors, setSupervisors] = useState<Supervisor[]>([]);
-  const [pendingFaults, setPendingFaults] = useState<PendingFault[]>([]);
-  const [result, setResult] = useState<{ status: 'idle' | 'queued' | 'error'; message?: string }>({ status: 'idle' });
+export default function RepairsPage() {
+  const role = useAppRole();
+  const [truck, setTruck] = useState('');
+  const [kit, setKit] = useState<RepairTruckKit | null>(null);
+  const [loadingTruck, setLoadingTruck] = useState(false);
+  const [selected, setSelected] = useState<Set<Position>>(new Set());
+  const [modes, setModes] = useState<Record<Position, PositionMode>>({
+    mother: 'replace',
+    B: 'replace',
+    C: 'replace',
+    D: 'replace',
+  });
+  const [replacements, setReplacements] = useState<Record<Position, string>>({
+    mother: '',
+    B: '',
+    C: '',
+    D: '',
+  });
+  const [reason, setReason] = useState<'faulty' | 'damaged'>('faulty');
+  const [description, setDescription] = useState('');
+  const [notes, setNotes] = useState('');
+  const [pool, setPool] = useState<RepairPoolItem[]>([]);
+  const [pending, setPending] = useState(0);
+  const [working, setWorking] = useState(false);
+  const [result, setResult] = useState<{ tone: 'ok' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const truckId = params.get('truck');
-    const deviceId = params.get('device');
-    if (truckId || deviceId) {
-      setForm((current) => ({
-        ...current,
-        ...(truckId ? { truckId } : {}),
-        ...(deviceId ? { deviceId } : {}),
-      }));
-    }
+    const contextualTruck = params.get('truck');
+    if (contextualTruck) setTruck(contextualTruck);
   }, []);
 
   useEffect(() => {
-    fetchSupervisors().then(setSupervisors);
-  }, []);
-
-  useEffect(() => {
-    if (!form.deviceId) {
-      setHistory({ status: 'idle' });
-      return;
-    }
-
     let cancelled = false;
-    setHistory({ status: 'loading' });
-    fetchFaultHistory(form.deviceId).then((summary) => {
+    async function refresh() {
+      const [repairPool, queued] = await Promise.all([
+        fetchRepairPool(),
+        offlineDb.mutations.where('status').equals('pending').toArray(),
+      ]);
       if (cancelled) return;
-      setHistory(summary ? { status: 'ready', data: summary } : { status: 'error' });
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [form.deviceId]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPendingFaults() {
-      try {
-        const rows = await offlineDb.mutations.where('status').equals('pending').sortBy('seq');
-        if (cancelled) return;
-        setPendingFaults(
-          rows
-            .filter((row) => row.endpoint === '/api/faults')
-            .map((row) => {
-              const payload = row.payload as Partial<CreateFaultReportFormValues> | null;
-              return {
-                id: row.id,
-                truckId: typeof payload?.truckId === 'string' ? payload.truckId : null,
-                deviceId: typeof payload?.deviceId === 'string' ? payload.deviceId : null,
-                faultType: typeof payload?.faultType === 'string' ? payload.faultType : null,
-                clientTs: row.clientTs,
-                status: 'pending' as const,
-              };
-            }),
-        );
-      } catch {
-        if (!cancelled) setPendingFaults([]);
-      }
+      setPool(repairPool);
+      setPending(queued.filter((item) => item.endpoint === '/api/repairs').length);
     }
-
-    void loadPendingFaults();
-    const interval = window.setInterval(loadPendingFaults, 3000);
+    void refresh();
+    const interval = window.setInterval(refresh, 3000);
     return () => {
       cancelled = true;
       window.clearInterval(interval);
     };
   }, [result]);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
-    setResult({ status: 'idle' });
-    const outcome = await submitFaultReport(form);
-    if (outcome.status === 'queued') {
-      setResult({ status: 'queued' });
-      setForm(emptyForm);
-    } else {
-      setResult({ status: 'error', message: outcome.message });
+  async function loadTruck() {
+    if (!truck.trim()) return;
+    setLoadingTruck(true);
+    setResult(null);
+    const loaded = await fetchRepairTruck(truck.trim());
+    setLoadingTruck(false);
+    if (!loaded?.mother) {
+      setKit(null);
+      setResult({ tone: 'error', message: `No active kit was found for ${truck.trim().toUpperCase()}.` });
+      return;
     }
+    setKit(loaded);
+    setTruck(loaded.plate);
+    setSelected(new Set());
+    setReplacements({ mother: '', B: '', C: '', D: '' });
   }
 
-  function toggleLock(lock: string) {
-    const current = new Set(form.locksAffected);
-    if (current.has(lock)) {
-      current.delete(lock);
-    } else {
-      current.add(lock);
-    }
-    setForm({ ...form, locksAffected: [...current] });
+  function currentSerial(position: Position): string | null {
+    if (!kit) return null;
+    if (position === 'mother') return kit.mother?.serial ?? null;
+    return kit.subs.find((item) => item.slot === position)?.serial ?? null;
   }
 
-  function updateOptionalField<K extends keyof CreateFaultReportFormValues>(
-    key: K,
-    value: CreateFaultReportFormValues[K] | '',
-  ) {
-    const next = { ...form };
-    if (value === '') {
-      delete next[key];
-    } else {
-      next[key] = value as CreateFaultReportFormValues[K];
-    }
-    setForm(next);
+  function toggle(position: Position) {
+    if (!currentSerial(position)) return;
+    setSelected((current) => {
+      const next = new Set(current);
+      if (next.has(position)) next.delete(position);
+      else next.add(position);
+      return next;
+    });
   }
 
-  const draftComplete = Boolean(form.truckId && form.deviceId && form.locksAffected.length > 0 && form.description);
-  const recurrenceTone = history.status === 'ready' && history.data.count > 0 ? 'danger' : 'muted';
+  function selectEntireKit() {
+    if (!kit) return;
+    const available = positions.filter((position) => currentSerial(position));
+    setSelected(selected.size === available.length ? new Set() : new Set(available));
+  }
 
-  const statusItems = useMemo(
-    () => [
-      { label: 'Truck', value: humanTruckValue(form.truckId) || 'Not set', tone: form.truckId ? ('muted' as const) : ('danger' as const) },
-      { label: 'Device', value: form.deviceId || 'Not set', tone: form.deviceId ? ('muted' as const) : ('danger' as const) },
-      {
-        label: 'Locks affected',
-        value: form.locksAffected.length > 0 ? form.locksAffected.join(', ') : 'Not set',
-        tone: form.locksAffected.length > 0 ? ('muted' as const) : ('danger' as const),
-      },
-      {
-        label: 'Fault type',
-        value: formatOption(form.faultType) || 'Not set',
-        tone: form.faultType ? ('muted' as const) : ('danger' as const),
-      },
-      {
-        label: 'Submit state',
-        value: result.status === 'queued' ? 'QUEUED' : result.status === 'error' ? 'ERROR' : 'DRAFT',
-        tone: result.status === 'queued' ? ('ok' as const) : result.status === 'error' ? ('danger' as const) : ('muted' as const),
-      },
-    ],
-    [form, result.status],
+  const items = useMemo<RepairBatchFormValues['items']>(
+    () => positions
+      .filter((position) => selected.has(position))
+      .map((position) => ({
+        position,
+        ...(modes[position] === 'replace' && replacements[position].trim()
+          ? { replacementSerial: replacements[position].trim().toUpperCase() }
+          : {}),
+      })),
+    [modes, replacements, selected],
   );
+
+  const replacementsComplete = [...selected].every(
+    (position) => modes[position] === 'remove' || replacements[position].trim(),
+  );
+  const awaitingReplacement = [...selected].some(
+    (position) => modes[position] === 'replace' && !replacements[position].trim(),
+  );
+  const kitCurrentlyIncomplete = Boolean(kit && positions.some((position) => !currentSerial(position)));
+  const willBeIncomplete = kitCurrentlyIncomplete || [...selected].some(
+    (position) => modes[position] === 'remove',
+  );
+  const ready = Boolean(kit && items.length > 0 && description.trim() && replacementsComplete);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!kit || !ready) return;
+    setWorking(true);
+    setResult(null);
+    const outcome = await submitRepairBatch({
+      truck: kit.plate,
+      reason,
+      description: description.trim(),
+      notes: notes.trim() || undefined,
+      items,
+    });
+    setWorking(false);
+    if (outcome.status === 'error') {
+      setResult({ tone: 'error', message: outcome.message });
+      return;
+    }
+    setResult({
+      tone: 'ok',
+      message: `${items.length} repair operation${items.length === 1 ? '' : 's'} saved on this device and queued for sync.`,
+    });
+    setSelected(new Set());
+    setDescription('');
+    setNotes('');
+  }
+
+  async function triage(deviceId: string, outcome: 'revived' | 'dead') {
+    setWorking(true);
+    const response = await submitTriage(deviceId, outcome);
+    setWorking(false);
+    setResult(response.status === 'queued'
+      ? { tone: 'ok', message: outcome === 'revived' ? 'Return-to-service decision queued.' : 'Unusable-device decision queued.' }
+      : { tone: 'error', message: response.message });
+  }
 
   return (
     <main className="fault-cockpit">
       <IndustrialPageHeader
-        eyebrow="Incident capture and authority"
-        title="Repairs"
-        accent="Report"
-        metric={String(pendingFaults.length).padStart(2, '0')}
-        description="Report device issues while preserving authority, assignment and repair history."
-        status={<Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} fault reports queued</Badge>}
+        eyebrow="Hardware lifecycle"
+        title="Repair"
+        accent="Shop"
+        metric={String(pool.length).padStart(2, '0')}
+        description="Remove or replace one device, several positions, or an entire installed kit in one operation."
+        status={<Badge tone={pending ? 'warning' : 'muted'}>{pending} repair operations queued</Badge>}
       />
 
-      <TrustBanner
-        empty={!draftComplete}
-        emptyTitle="Fault draft incomplete"
-        emptyBody="Enter the device, truck, affected locks, and description before queueing this report."
-        state="unverified"
-        latestVerifiedAt={null}
-        weakestTier={null}
-      />
+      {result && <p className={`banner banner--${result.tone}`}>{result.message}</p>}
 
-      {result.status === 'queued' && <p className="banner banner--ok">Saved on device. Fault report is pending sync.</p>}
-      {result.status === 'error' && <p className="banner banner--error">{`Error: ${result.message}`}</p>}
-
-      <form className="fault-form cockpit-grid" onSubmit={handleSubmit}>
-        <section className="cockpit-grid__primary">
-          <Panel title="Device lookup">
-            <ScanInputRow
-              label="Device ID"
-              prefix="D"
-              value={form.deviceId}
-              placeholder="Scan or enter mother/sub device ID"
-              onChange={(value) => setForm({ ...form, deviceId: value })}
-            />
+      <form className="repair-workbench" onSubmit={submit}>
+        <Panel title="1 / Load installed kit">
+          <div className="repair-truck-loader">
             <label>
               <span>Truck plate</span>
-              <input
-                value={form.truckId}
-                onChange={(event) => setForm({ ...form, truckId: event.target.value })}
-                placeholder="Enter truck plate"
-                required
-              />
+              <input value={truck} onChange={(event) => setTruck(event.target.value.toUpperCase())} placeholder="FZE245DI" />
             </label>
-          </Panel>
+            <button className="btn btn--primary" type="button" disabled={!truck.trim() || loadingTruck} onClick={loadTruck}>
+              {loadingTruck ? 'Loading' : 'Load kit'}
+            </button>
+          </div>
+        </Panel>
 
-          <Panel title="Fault details">
-            <div className="checklist-grid">
-              <label>
-                <span>Reported by</span>
-                <select
-                  value={form.reportedBy ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('reportedBy', event.target.value as CreateFaultReportFormValues['reportedBy'] | '')
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="station_manager">Station manager</option>
-                  <option value="customer_rep">Customer rep</option>
-                  <option value="driver">Driver</option>
-                  <option value="team_member">Team member</option>
-                  <option value="self_identified">Self identified</option>
-                </select>
-              </label>
-              <label>
-                <span>Fault type</span>
-                <select
-                  value={form.faultType ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('faultType', event.target.value as CreateFaultReportFormValues['faultType'] | '')
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="device_offline">Device offline</option>
-                  <option value="dynamic_password_failed">Dynamic password failed</option>
-                  <option value="sub_lock_not_opening">Sub-lock not opening</option>
-                  <option value="charging_failure">Charging failure</option>
-                  <option value="configuration_error">Configuration error</option>
-                  <option value="hardware_damage">Hardware damage</option>
-                  <option value="seal_discrepancy">Seal discrepancy</option>
-                  <option value="other">Other</option>
-                </select>
-              </label>
-              <label>
-                <span>Truck location</span>
-                <select
-                  value={form.truckLocation ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('truckLocation', event.target.value as CreateFaultReportFormValues['truckLocation'] | '')
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="in_transit">In transit</option>
-                  <option value="customer_location">Customer location</option>
-                  <option value="installation_point">Installation point</option>
-                </select>
-              </label>
-              <label>
-                <span>Device online</span>
-                <select
-                  value={form.deviceOnline ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('deviceOnline', event.target.value as CreateFaultReportFormValues['deviceOnline'] | '')
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                  <option value="intermittent">Intermittent</option>
-                </select>
-              </label>
-            </div>
-
-            <div className="lock-choice-grid" role="group" aria-label="Locks affected">
-              {lockOptions.map((lock) => (
-                <label className="choice-pill" key={lock}>
-                  <input
-                    type="checkbox"
-                    checked={form.locksAffected.includes(lock)}
-                    onChange={() => toggleLock(lock)}
-                  />
-                  <span>{lock}</span>
-                </label>
+        <Panel
+          title="2 / Select devices"
+          action={kit ? <button className="btn btn--secondary" type="button" onClick={selectEntireKit}>Select entire kit</button> : undefined}
+        >
+          <div className="repair-device-grid">
+            {positions.map((position) => {
+              const serial = currentSerial(position);
+              const active = selected.has(position);
+              return (
+                <section className={`repair-device ${active ? 'repair-device--selected' : ''}`} key={position}>
+                  <label className="repair-device__select">
+                    <input type="checkbox" checked={active} disabled={!serial} onChange={() => toggle(position)} />
+                    <span>{position === 'mother' ? 'Mother lock' : `Sub-lock ${position}`}</span>
+                    <strong>{serial ?? 'Not installed'}</strong>
+                  </label>
+                </section>
+              );
+            })}
+          </div>
+          {selected.size > 0 && (
+            <div className="repair-operation-list">
+              {positions.filter((position) => selected.has(position)).map((position) => (
+                <section className="repair-operation-row" key={position}>
+                  <div className="repair-operation-row__device">
+                    <span>{position === 'mother' ? 'Mother lock' : `Sub-lock ${position}`}</span>
+                    <strong>{currentSerial(position)}</strong>
+                  </div>
+                  <label>
+                    <span>Operation</span>
+                    <select
+                      value={modes[position]}
+                      onChange={(event) => setModes({ ...modes, [position]: event.target.value as PositionMode })}
+                    >
+                      <option value="replace">Replace now</option>
+                      <option value="remove">Remove only</option>
+                    </select>
+                  </label>
+                  {modes[position] === 'replace' ? (
+                    <ScanInputRow
+                      label="Replacement serial"
+                      prefix={position === 'mother' ? 'M' : position}
+                      value={replacements[position]}
+                      placeholder={`Scan replacement ${position === 'mother' ? 'mother' : position}`}
+                      onChange={(value) => setReplacements({ ...replacements, [position]: value.toUpperCase() })}
+                    />
+                  ) : (
+                    <p className="repair-operation-row__notice">Position will remain empty until a replacement is installed.</p>
+                  )}
+                </section>
               ))}
             </div>
+          )}
+        </Panel>
 
+        <div className="repair-detail-grid">
+          <Panel title="3 / Reason and notes">
             <label>
-              <span>Description</span>
-              <textarea
-                value={form.description}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
-                placeholder="Describe the observed issue"
-                required
-              />
+              <span>Reason</span>
+              <select value={reason} onChange={(event) => setReason(event.target.value as 'faulty' | 'damaged')}>
+                <option value="faulty">Faulty</option>
+                <option value="damaged">Damaged</option>
+              </select>
             </label>
-
-            <div className="kit-panel__footer">
-              <Badge tone="ok">Saved on device</Badge>
-              <Badge tone={pendingFaults.length > 0 ? 'warning' : 'muted'}>{pendingFaults.length} pending sync</Badge>
-              <button className="btn btn--primary" type="submit">
-                Queue fault
-              </button>
-            </div>
-          </Panel>
-        </section>
-
-        <section className="cockpit-grid__middle">
-          <Panel title="Current fault status">
-            <StatusList items={statusItems} />
+            <label>
+              <span>What happened?</span>
+              <textarea value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Required description" />
+            </label>
+            <label>
+              <span>Additional notes</span>
+              <textarea value={notes} onChange={(event) => setNotes(event.target.value)} placeholder="Optional field notes" />
+            </label>
           </Panel>
 
-          <Panel title="Fault history">
-            <StatusList
-              items={[
-                {
-                  label: 'Prior fault removals',
-                  value:
-                    history.status === 'idle'
-                      ? 'No device selected'
-                      : history.status === 'loading'
-                        ? 'Loading'
-                        : history.status === 'error'
-                          ? 'Unavailable'
-                          : String(history.data.count),
-                  tone: recurrenceTone as 'danger' | 'muted',
-                },
-                {
-                  label: 'Most recent',
-                  value:
-                    history.status === 'ready' && history.data.mostRecentAt
-                      ? `${daysAgo(history.data.mostRecentAt)} days ago`
-                      : '-',
-                  tone: recurrenceTone as 'danger' | 'muted',
-                },
-              ]}
-            />
+          <Panel title="4 / Before and after">
+            <StatusList items={[
+              { label: 'Truck', value: kit?.plate ?? 'Not loaded', tone: kit ? 'muted' : 'danger' },
+              { label: 'Selected', value: items.length ? items.map((item) => item.position.toUpperCase()).join(', ') : 'None', tone: items.length ? 'muted' : 'danger' },
+              { label: 'Repair pool', value: `${items.length} outgoing`, tone: items.length ? 'danger' : 'muted' },
+              {
+                label: 'Kit state',
+                value: awaitingReplacement
+                  ? 'ADD REPLACEMENT SERIALS'
+                  : willBeIncomplete
+                    ? 'INCOMPLETE AFTER SAVE'
+                    : 'COMPLETE AFTER SAVE',
+                tone: awaitingReplacement || willBeIncomplete ? 'danger' : 'ok',
+              },
+            ]} />
+            <button className="btn btn--primary repair-submit" type="submit" disabled={!ready || working}>
+              {working ? 'Saving operation' : `Confirm ${items.length || ''} repair operation${items.length === 1 ? '' : 's'}`}
+            </button>
           </Panel>
-
-          <Panel title="Authority">
-            <div className="checklist-grid">
-              <label>
-                <span>Static password used</span>
-                <select
-                  value={form.staticPwUsed ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('staticPwUsed', event.target.value as CreateFaultReportFormValues['staticPwUsed'] | '')
-                  }
-                >
-                  <option value="">N/A</option>
-                  <option value="yes">Yes</option>
-                  <option value="no">No</option>
-                </select>
-              </label>
-              <label>
-                <span>Static password authorized by</span>
-                <select
-                  value={form.staticPwAuthBy ?? ''}
-                  onChange={(event) => setForm({ ...form, staticPwAuthBy: event.target.value || null })}
-                >
-                  <option value="">N/A</option>
-                  {supervisors.map((supervisor) => (
-                    <option key={supervisor.id} value={supervisor.id}>
-                      {supervisor.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                <span>Incident status</span>
-                <select
-                  value={form.incidentStatus ?? ''}
-                  onChange={(event) =>
-                    updateOptionalField('incidentStatus', event.target.value as CreateFaultReportFormValues['incidentStatus'] | '')
-                  }
-                >
-                  <option value="">Not set</option>
-                  <option value="closed">Closed</option>
-                  <option value="open_pending_followup">Open pending follow-up</option>
-                </select>
-              </label>
-              <label>
-                <span>Closure confirmed by</span>
-                <select
-                  value={form.closureBy ?? ''}
-                  onChange={(event) => setForm({ ...form, closureBy: event.target.value || null })}
-                >
-                  <option value="">N/A</option>
-                  {supervisors.map((supervisor) => (
-                    <option key={supervisor.id} value={supervisor.id}>
-                      {supervisor.displayName}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          </Panel>
-        </section>
-
-        <section className="cockpit-grid__side">
-          <Panel title={`Fault sync queue (${pendingFaults.length})`}>
-            <DataTable
-              columns={['Time', 'Truck', 'Device', 'Type', 'Status']}
-              rows={pendingFaults.map((item) => [
-                formatClientTimestamp(item.clientTs),
-                humanTruckValue(item.truckId),
-                item.deviceId ?? '-',
-                formatOption(item.faultType) || '-',
-                item.status,
-              ])}
-              emptyLabel="No queued fault reports on this device."
-            />
-          </Panel>
-        </section>
+        </div>
       </form>
+
+      <Panel title={`Repair pool / ${pool.length}`}>
+        <DataTable
+          columns={['Device', 'Type', 'Entered repair', 'Reason', 'Disposition']}
+          rows={pool.map((item) => [
+            item.serial,
+            item.deviceType,
+            item.enteredRepairAt ? formatDate(item.enteredRepairAt) : '-',
+            item.removalReason?.replaceAll('_', ' ') ?? '-',
+            role === 'supervisor' ? (
+              <div className="repair-pool-actions" key={item.deviceId}>
+                <button className="btn btn--secondary" type="button" disabled={working} onClick={() => triage(item.deviceId, 'revived')}>Return to service</button>
+                <button className="btn btn--danger" type="button" disabled={working} onClick={() => triage(item.deviceId, 'dead')}>Declare unusable</button>
+              </div>
+            ) : (
+              <span key={item.deviceId}>Supervisor disposition required</span>
+            ),
+          ])}
+          emptyLabel="No devices are awaiting repair disposition."
+        />
+      </Panel>
     </main>
   );
 }
 
-function humanTruckValue(value: string | null | undefined): string {
-  if (!value) return '-';
-  return value.startsWith('trk_') ? 'Loaded truck' : value;
-}
-
-function daysAgo(unixSeconds: number): number {
-  return Math.floor((Date.now() / 1000 - unixSeconds) / 86400);
-}
-
-function formatClientTimestamp(value: number): string {
-  if (!value) return '-';
-  const date = value > 100000000000 ? new Date(value) : new Date(value * 1000);
-  return new Intl.DateTimeFormat("en-GB", {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(date);
-}
-
-function formatOption(value: string | null | undefined): string {
-  if (!value) return '';
-  return value.replaceAll('_', ' ');
+function formatDate(value: number): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(value * 1000));
 }
