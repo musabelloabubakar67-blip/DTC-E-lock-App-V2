@@ -31,6 +31,15 @@ export type RegisterKitResult = {
   registrationLogId: string;
 };
 
+export type RegisterIncompleteKitInput = {
+  actor: AuthenticatedUser;
+  motherSerial: string;
+  subSerials: string[];
+  simNumber: string;
+  notes?: string;
+  loggedDate?: number;
+};
+
 export type RegistrationListItem = {
   id: string;
   loggedDate: number;
@@ -152,6 +161,109 @@ export function registerKit(db: DbClient, input: RegisterKitInput): RegisterKitR
         entityId: registrationLogId,
         operation: 'create',
         afterJson: JSON.stringify({ motherDeviceId, subDeviceIds, motherSerial, subSerials }),
+      })
+      .run();
+
+    return { motherDeviceId, subDeviceIds, registrationLogId };
+  });
+}
+
+/** Supervisor-only import path for legitimate registrations with fewer than three sub-locks. */
+export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKitInput): RegisterKitResult {
+  requireSupervisor(input.actor);
+
+  const motherSerial = normalizeSerial(input.motherSerial);
+  const subSerials = input.subSerials.map(normalizeSerial).filter(Boolean);
+  if (subSerials.length >= 3) {
+    throw new BusinessError('Use the standard registration flow for complete kits');
+  }
+  if (new Set([motherSerial, ...subSerials]).size !== subSerials.length + 1) {
+    throw new BusinessError('All supplied device serials must be distinct');
+  }
+
+  assertNotRegistered(db, motherSerial);
+  for (const serial of subSerials) assertNotRegistered(db, serial);
+
+  const now = Math.floor(Date.now() / 1000);
+  const loggedDate = input.loggedDate ?? now;
+  const completenessNote = `Incomplete registration import: ${subSerials.length} of 3 sub-locks supplied.`;
+  const notes = input.notes ? `${completenessNote} ${input.notes}` : completenessNote;
+
+  return db.transaction((tx: DbClient) => {
+    const motherDeviceId = createId();
+    tx.insert(devices)
+      .values({
+        id: motherDeviceId,
+        orgId: input.actor.orgId,
+        deviceType: 'mother',
+        serial: motherSerial,
+        simNumber: input.simNumber,
+        lifecycleStatus: 'available',
+        registeredAt: loggedDate,
+        registeredBy: input.actor.id,
+        importUnverified: 1,
+        notes,
+      })
+      .run();
+
+    const subDeviceIds: string[] = [];
+    for (const subSerial of subSerials) {
+      const subDeviceId = createId();
+      tx.insert(devices)
+        .values({
+          id: subDeviceId,
+          orgId: input.actor.orgId,
+          deviceType: 'sub',
+          serial: subSerial,
+          lifecycleStatus: 'available',
+          registeredAt: loggedDate,
+          registeredBy: input.actor.id,
+          importUnverified: 1,
+          notes,
+        })
+        .run();
+      tx.insert(kitMembers)
+        .values({
+          id: createId(),
+          orgId: input.actor.orgId,
+          motherDeviceId,
+          subDeviceId,
+          addedAt: loggedDate,
+        })
+        .run();
+      subDeviceIds.push(subDeviceId);
+    }
+
+    const registrationLogId = createId();
+    tx.insert(registrationLogs)
+      .values({
+        id: registrationLogId,
+        orgId: input.actor.orgId,
+        motherDeviceId,
+        actorUserId: input.actor.id,
+        loggedDate,
+        simNumber: input.simNumber,
+        source: 'import',
+        notes,
+      })
+      .run();
+
+    tx.insert(auditLog)
+      .values({
+        id: createId(),
+        orgId: input.actor.orgId,
+        actorUserId: input.actor.id,
+        entityTable: 'registration_logs',
+        entityId: registrationLogId,
+        operation: 'import',
+        afterJson: JSON.stringify({
+          motherDeviceId,
+          subDeviceIds,
+          motherSerial,
+          subSerials,
+          incomplete: true,
+          notes,
+        }),
       })
       .run();
 

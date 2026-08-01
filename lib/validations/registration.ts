@@ -15,4 +15,19 @@ export const registerKitSchema = z.object({
   btWriteDone: yesNo.optional(),
 });
 
+export const registerIncompleteKitSchema = z.object({
+  motherSerial: z.string().trim().regex(/^\d{12}$/, 'Mother serial must be 12 digits'),
+  subSerials: z
+    .array(z.string().trim().regex(/^[0-9A-Fa-f]{12}$/, 'Sub-lock serials must be 12 hexadecimal characters'))
+    .max(2, 'Incomplete registrations can contain at most two sub-locks'),
+  simNumber: z.string().trim().regex(/^\d{10,15}$/, 'SIM number must contain 10 to 15 digits'),
+  notes: z.string().trim().max(500).optional(),
+}).superRefine((value, context) => {
+  const serials = [value.motherSerial.toUpperCase(), ...value.subSerials.map((serial) => serial.toUpperCase())];
+  if (new Set(serials).size !== serials.length) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: 'All supplied device serials must be distinct' });
+  }
+});
+
 export type RegisterKitFormValues = z.infer<typeof registerKitSchema>;
+export type RegisterIncompleteKitFormValues = z.infer<typeof registerIncompleteKitSchema>;

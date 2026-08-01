@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { eq, isNull, and } from 'drizzle-orm';
-import { kitMembers, devices, slotPairings } from '../../db/schema';
+import { kitMembers, devices, registrationLogs, slotPairings } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures } from '../../tests/helpers/fixtures';
-import { listRegistrationsPage, registerKit } from '../registration.service';
-import { BusinessError } from '../../lib/errors';
+import { listRegistrationsPage, registerIncompleteKit, registerKit } from '../registration.service';
+import { AuthzError, BusinessError } from '../../lib/errors';
 
 describe('registration.service', () => {
   it('writes an unslotted kit: mother + 3 subs, all available, kit_members open with no slot', () => {
@@ -130,5 +130,43 @@ describe('registration.service', () => {
     expect(secondPage.items).toHaveLength(1);
     expect(searchPage.total).toBe(1);
     expect(searchPage.items[0]?.motherSerial).toBe('PAGE-MOTHER-2');
+  });
+
+  it('lets a supervisor import a mother-only or partial registration without placeholder devices', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    const motherOnly = registerIncompleteKit(db, {
+      actor,
+      motherSerial: '123456789012',
+      subSerials: [],
+      simNumber: '08012345678',
+    });
+    const partial = registerIncompleteKit(db, {
+      actor,
+      motherSerial: '234567890123',
+      subSerials: ['AABBCCDDEEFF', '112233445566'],
+      simNumber: '08087654321',
+    });
+
+    expect(motherOnly.subDeviceIds).toHaveLength(0);
+    expect(partial.subDeviceIds).toHaveLength(2);
+    expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, motherOnly.motherDeviceId)).all()).toHaveLength(0);
+    expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, partial.motherDeviceId)).all()).toHaveLength(2);
+    expect(db.select().from(registrationLogs).where(eq(registrationLogs.id, partial.registrationLogId)).get()?.source).toBe('import');
+    expect(db.select().from(devices).where(eq(devices.id, partial.motherDeviceId)).get()?.importUnverified).toBe(1);
+  });
+
+  it('rejects incomplete registration imports from installers', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+
+    expect(() => registerIncompleteKit(db, {
+      actor: { id: installerId, orgId, role: 'installer' },
+      motherSerial: '123456789012',
+      subSerials: [],
+      simNumber: '08012345678',
+    })).toThrow(AuthzError);
   });
 });

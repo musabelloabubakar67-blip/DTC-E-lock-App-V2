@@ -2,8 +2,8 @@
 
 import { useFormState } from 'react-dom';
 import { signOut } from 'next-auth/react';
-import { useState, type ReactNode } from 'react';
-import { Database, Eye, EyeOff, FileJson, FileSpreadsheet, KeyRound, LogOut, Palette, UserPlus, Users, X } from 'lucide-react';
+import { useState, type FormEvent, type ReactNode } from 'react';
+import { Database, Eye, EyeOff, FileJson, FileSpreadsheet, KeyRound, LogOut, PackagePlus, Palette, UserPlus, Users, X } from 'lucide-react';
 import { Badge, DataTable, IndustrialPageHeader, Panel } from '../_components/ProductUI';
 import type { ExportSummary } from '../../../services/data-management.service';
 import type { SettingsData } from '../../../services/settings.service';
@@ -285,6 +285,7 @@ export default function SettingsClient({
 
         {canManageUsers && (
           <div className="settings-layout__data" id="exports">
+            <IncompleteRegistrationPanel />
             <Panel title="Exports" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
               <p className="settings-panel-copy">Export operational records in CSV or JSON.</p>
               <div className="export-list" role="list">
@@ -312,6 +313,76 @@ export default function SettingsClient({
         )}
       </section>
     </main>
+  );
+}
+
+function IncompleteRegistrationPanel() {
+  const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const subSerials = ['subSerialB', 'subSerialC', 'subSerialD']
+      .map((name) => String(data.get(name) ?? '').trim())
+      .filter(Boolean);
+    setSaving(true);
+    setStatus(null);
+    try {
+      const response = await fetch('/api/registrations/incomplete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          motherSerial: String(data.get('motherSerial') ?? ''),
+          simNumber: String(data.get('simNumber') ?? ''),
+          subSerials,
+          notes: String(data.get('notes') ?? ''),
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Registration failed');
+      form.reset();
+      setStatus({ tone: 'success', message: 'Incomplete registration saved and audited.' });
+    } catch (error) {
+      setStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Registration failed' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel title="Incomplete registrations" action={<PackagePlus className="settings-panel-icon" aria-hidden="true" />}>
+      <p className="settings-panel-copy">Supervisor import for legitimate records with zero, one, or two known sub-locks.</p>
+      <form className="settings-form" onSubmit={submit}>
+        <label>
+          <span>Mother serial</span>
+          <input name="motherSerial" inputMode="numeric" required />
+        </label>
+        <label>
+          <span>SIM number</span>
+          <input name="simNumber" inputMode="numeric" required />
+        </label>
+        {(['B', 'C', 'D'] as const).map((slot) => (
+          <label key={slot}>
+            <span>Sub-lock {slot} (optional)</span>
+            <input name={`subSerial${slot}`} autoCapitalize="characters" />
+          </label>
+        ))}
+        <label>
+          <span>Import note</span>
+          <input name="notes" placeholder="Source or reason devices are missing" />
+        </label>
+        {status && (
+          <p className={`banner ${status.tone === 'error' ? 'banner--error' : 'banner--success'}`}>
+            {status.message}
+          </p>
+        )}
+        <button className="btn btn--primary" type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Save incomplete registration'}
+        </button>
+      </form>
+    </Panel>
   );
 }
 
