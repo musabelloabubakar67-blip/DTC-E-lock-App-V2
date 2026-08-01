@@ -7,7 +7,7 @@
 // and inline registration would fabricate a kit with no sub-pairing/config/sim. An unregistered
 // handheld device goes through register-then-install; a device found already mounted with no
 // registration record is handled by the verification mismatch flow (§3), not by this function.
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import {
   devices,
@@ -23,6 +23,7 @@ import {
 import { BusinessError } from '../lib/errors';
 import { checkIncomingDeviceConflict, assertConflictProceeds } from './movement.service';
 import { markInService } from './lifecycle.service';
+import { requireSupervisor, type AuthenticatedUser } from './auth.service';
 
 export type TruckCompany = 'mrs' | 'dangote';
 
@@ -92,6 +93,14 @@ export type InstallationHistoryPage = {
   total: number;
   page: number;
   pageSize: number;
+};
+
+export type InstallationVerificationBackfillResult = {
+  confirmedInstalls: number;
+  eligible: number;
+  created: number;
+  alreadyVerified: number;
+  skippedIncompleteKit: number;
 };
 
 export function recordInstallation(db: DbClient, input: InstallKitInput): InstallKitResult {
@@ -395,6 +404,178 @@ export function installKit(db: DbClient, input: InstallKitInput): InstallKitResu
 
     return { assignmentId, slotPairingIds, installationLogId, verificationId, truckCompanyAssignmentId };
   });
+}
+
+export function backfillInstallationVerifications(
+  db: DbClient,
+  input: {
+    actor: AuthenticatedUser;
+    from: number;
+    to: number;
+    dryRun?: boolean;
+  },
+): InstallationVerificationBackfillResult {
+  requireSupervisor(input.actor);
+  if (!Number.isInteger(input.from) || !Number.isInteger(input.to) || input.from > input.to) {
+    throw new BusinessError('A valid installation date range is required');
+  }
+
+  const confirmed = db
+    .select({
+      id: installationLogs.id,
+      truckId: installationLogs.truckId,
+      motherDeviceId: installationLogs.motherDeviceId,
+      actorUserId: installationLogs.actorUserId,
+      loggedDate: installationLogs.loggedDate,
+      overallStatus: installationLogs.overallStatus,
+    })
+    .from(installationLogs)
+    .where(and(
+      eq(installationLogs.orgId, input.actor.orgId),
+      gte(installationLogs.loggedDate, input.from),
+      lte(installationLogs.loggedDate, input.to),
+    ))
+    .all()
+    .filter((row: { overallStatus: string | null }) =>
+      row.overallStatus === 'successful' || row.overallStatus === 'completed_with_issues',
+    ) as Array<{
+      id: string;
+      truckId: string;
+      motherDeviceId: string;
+      actorUserId: string;
+      loggedDate: number;
+      overallStatus: 'successful' | 'completed_with_issues';
+    }>;
+
+  const installationAuditById = new Map<string, { slotPairingIds: string[] }>();
+  const installationAudits = db
+    .select({ entityId: auditLog.entityId, afterJson: auditLog.afterJson })
+    .from(auditLog)
+    .where(and(eq(auditLog.orgId, input.actor.orgId), eq(auditLog.entityTable, 'installation_logs')))
+    .all() as Array<{ entityId: string; afterJson: string }>;
+  for (const audit of installationAudits) {
+    try {
+      const payload = JSON.parse(audit.afterJson) as { slotPairingIds?: unknown };
+      if (Array.isArray(payload.slotPairingIds) && payload.slotPairingIds.every((id) => typeof id === 'string')) {
+        installationAuditById.set(audit.entityId, { slotPairingIds: payload.slotPairingIds as string[] });
+      }
+    } catch {
+      // Invalid legacy audit JSON is not enough evidence for an automatic verification.
+    }
+  }
+
+  const verifiedInstallationIds = new Set<string>();
+  const verificationAudits = db
+    .select({ afterJson: auditLog.afterJson })
+    .from(auditLog)
+    .where(and(eq(auditLog.orgId, input.actor.orgId), eq(auditLog.entityTable, 'verifications')))
+    .all() as Array<{ afterJson: string }>;
+  for (const audit of verificationAudits) {
+    try {
+      const payload = JSON.parse(audit.afterJson) as { installationLogId?: unknown };
+      if (typeof payload.installationLogId === 'string') verifiedInstallationIds.add(payload.installationLogId);
+    } catch {
+      // Ignore malformed legacy audit rows.
+    }
+  }
+
+  const candidates: Array<{
+    installation: (typeof confirmed)[number];
+    motherSerial: string;
+    subSerials: string[];
+  }> = [];
+  let alreadyVerified = 0;
+  let skippedIncompleteKit = 0;
+
+  for (const installation of confirmed) {
+    if (verifiedInstallationIds.has(installation.id)) {
+      alreadyVerified += 1;
+      continue;
+    }
+    const slotPairingIds = installationAuditById.get(installation.id)?.slotPairingIds ?? [];
+    if (slotPairingIds.length !== 3 || new Set(slotPairingIds).size !== 3) {
+      skippedIncompleteKit += 1;
+      continue;
+    }
+    const pairings = db
+      .select({ id: slotPairings.id, subDeviceId: slotPairings.subDeviceId })
+      .from(slotPairings)
+      .where(inArray(slotPairings.id, slotPairingIds))
+      .all() as Array<{ id: string; subDeviceId: string }>;
+    const pairingById = new Map(pairings.map((pairing) => [pairing.id, pairing.subDeviceId]));
+    const subDeviceIds = slotPairingIds.map((id) => pairingById.get(id)).filter((id): id is string => Boolean(id));
+    if (subDeviceIds.length !== 3 || new Set(subDeviceIds).size !== 3) {
+      skippedIncompleteKit += 1;
+      continue;
+    }
+    const mother = db.select({ serial: devices.serial }).from(devices).where(eq(devices.id, installation.motherDeviceId)).get();
+    const subSerials = subDeviceIds.map((id) =>
+      db.select({ serial: devices.serial }).from(devices).where(eq(devices.id, id)).get()?.serial,
+    ).filter((serial): serial is string => Boolean(serial));
+    if (!mother || subSerials.length !== 3) {
+      skippedIncompleteKit += 1;
+      continue;
+    }
+    candidates.push({ installation, motherSerial: mother.serial, subSerials });
+  }
+
+  if (input.dryRun || candidates.length === 0) {
+    return {
+      confirmedInstalls: confirmed.length,
+      eligible: candidates.length,
+      created: 0,
+      alreadyVerified,
+      skippedIncompleteKit,
+    };
+  }
+
+  db.transaction((tx: DbClient) => {
+    for (const candidate of candidates) {
+      const verificationId = createId();
+      tx.insert(verifications)
+        .values({
+          id: verificationId,
+          orgId: input.actor.orgId,
+          truckId: candidate.installation.truckId,
+          motherDeviceId: candidate.installation.motherDeviceId,
+          source: 'manual',
+          result: 'match',
+          observedMaster: candidate.motherSerial,
+          observedSubsJson: JSON.stringify(candidate.subSerials),
+          weakestTier: 'manual',
+          verifiedBy: candidate.installation.actorUserId,
+          verifiedAt: candidate.installation.loggedDate,
+          notes: `Backfilled from confirmed installation ${candidate.installation.id}`,
+        })
+        .run();
+      tx.insert(auditLog)
+        .values({
+          id: createId(),
+          orgId: input.actor.orgId,
+          actorUserId: input.actor.id,
+          entityTable: 'verifications',
+          entityId: verificationId,
+          operation: 'create',
+          afterJson: JSON.stringify({
+            motherDeviceId: candidate.installation.motherDeviceId,
+            truckId: candidate.installation.truckId,
+            result: 'match',
+            weakestTier: 'manual',
+            via: 'confirmed_installation_backfill',
+            installationLogId: candidate.installation.id,
+          }),
+        })
+        .run();
+    }
+  });
+
+  return {
+    confirmedInstalls: confirmed.length,
+    eligible: candidates.length,
+    created: candidates.length,
+    alreadyVerified,
+    skippedIncompleteKit,
+  };
 }
 
 export function listInstallationHistory(db: DbClient, orgId: string, limit?: number): InstallationHistoryItem[] {

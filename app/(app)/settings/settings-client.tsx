@@ -3,7 +3,7 @@
 import { useFormState } from 'react-dom';
 import { signOut } from 'next-auth/react';
 import { useState, type FormEvent, type ReactNode } from 'react';
-import { Database, Eye, EyeOff, FileJson, FileSpreadsheet, KeyRound, LogOut, PackagePlus, Palette, UserPlus, Users, X } from 'lucide-react';
+import { BadgeCheck, Database, Eye, EyeOff, FileJson, FileSpreadsheet, KeyRound, LogOut, PackagePlus, Palette, UserPlus, Users, X } from 'lucide-react';
 import { Badge, DataTable, IndustrialPageHeader, Panel } from '../_components/ProductUI';
 import type { ExportSummary } from '../../../services/data-management.service';
 import type { SettingsData } from '../../../services/settings.service';
@@ -286,6 +286,7 @@ export default function SettingsClient({
         {canManageUsers && (
           <div className="settings-layout__data" id="exports">
             <IncompleteRegistrationPanel />
+            <InstallationVerificationBackfillPanel />
             <Panel title="Exports" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
               <p className="settings-panel-copy">Export operational records in CSV or JSON.</p>
               <div className="export-list" role="list">
@@ -313,6 +314,81 @@ export default function SettingsClient({
         )}
       </section>
     </main>
+  );
+}
+
+function InstallationVerificationBackfillPanel() {
+  const today = new Date().toISOString().slice(0, 10);
+  const [result, setResult] = useState<{ message: string; error: boolean } | null>(null);
+  const [working, setWorking] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null;
+    const dryRun = submitter?.value !== 'apply';
+    const fromDate = String(data.get('fromDate') ?? '');
+    const toDate = String(data.get('toDate') ?? '');
+    setWorking(true);
+    setResult(null);
+    try {
+      const response = await fetch('/api/verifications/backfill-installations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          from: Math.floor(new Date(`${fromDate}T00:00:00`).getTime() / 1000),
+          to: Math.floor(new Date(`${toDate}T23:59:59`).getTime() / 1000),
+          dryRun,
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Verification backfill failed');
+      const summary = payload.data as {
+        confirmedInstalls: number;
+        eligible: number;
+        created: number;
+        alreadyVerified: number;
+        skippedIncompleteKit: number;
+      };
+      setResult({
+        error: false,
+        message:
+        dryRun
+          ? `${summary.eligible} eligible of ${summary.confirmedInstalls} confirmed installs; ${summary.alreadyVerified} already verified; ${summary.skippedIncompleteKit} skipped.`
+          : `${summary.created} installation verification(s) created; ${summary.alreadyVerified} already verified; ${summary.skippedIncompleteKit} skipped.`,
+      });
+    } catch (error) {
+      setResult({
+        error: true,
+        message: error instanceof Error ? error.message : 'Verification backfill failed',
+      });
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <Panel title="Installation verification" action={<BadgeCheck className="settings-panel-icon" aria-hidden="true" />}>
+      <p className="settings-panel-copy">Verify completed app installations from a controlled date range.</p>
+      <form className="settings-form" onSubmit={submit}>
+        <label>
+          <span>From</span>
+          <input name="fromDate" type="date" defaultValue={today} required />
+        </label>
+        <label>
+          <span>Through</span>
+          <input name="toDate" type="date" defaultValue={today} required />
+        </label>
+        {result && <p className={`banner ${result.error ? 'banner--error' : 'banner--success'}`}>{result.message}</p>}
+        <div className="settings-user-actions">
+          <button className="btn btn--secondary" type="submit" value="preview" disabled={working}>Preview</button>
+          <button className="btn btn--primary" type="submit" value="apply" disabled={working}>
+            {working ? 'Working...' : 'Verify confirmed installs'}
+          </button>
+        </div>
+      </form>
+    </Panel>
   );
 }
 

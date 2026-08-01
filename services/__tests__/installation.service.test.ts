@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { eq, isNull, and } from 'drizzle-orm';
-import { slotPairings, truckAssignments, devices, verifications } from '../../db/schema';
+import { slotPairings, truckAssignments, devices, installationLogs, verifications } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck } from '../../tests/helpers/fixtures';
 import { registerKit } from '../registration.service';
-import { installKit, listInstallationHistory, listInstallationHistoryPage, recordInstallation } from '../installation.service';
+import { backfillInstallationVerifications, installKit, listInstallationHistory, listInstallationHistoryPage, recordInstallation } from '../installation.service';
 
 describe('installation.service', () => {
   it('assigns slots positionally (C1→B, C2→C, C3→D) and sets mother + subs in_service', () => {
@@ -241,5 +241,64 @@ describe('installation.service', () => {
     });
     expect(failed.verificationId).toBeNull();
     expect(db.select().from(verifications).all()).toHaveLength(1);
+  });
+
+  it('backfills confirmed app installs once and ignores dates outside the requested range', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId, supervisorId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'BACK123AB');
+    const kit = registerKit(db, {
+      orgId,
+      actorUserId: installerId,
+      motherSerial: 'BACK-MOTHER',
+      subSerials: ['BACK-SUB-B', 'BACK-SUB-C', 'BACK-SUB-D'],
+      simNumber: '2348055555555',
+    });
+    const legacy = installKit(db, {
+      orgId,
+      actorUserId: installerId,
+      truckId,
+      motherDeviceId: kit.motherDeviceId,
+      subDeviceIds: kit.subDeviceIds as [string, string, string],
+      company: 'mrs',
+      loggedDate: 1_700_100_000,
+    });
+    db.update(installationLogs)
+      .set({ overallStatus: 'successful' })
+      .where(eq(installationLogs.id, legacy.installationLogId))
+      .run();
+
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+    const preview = backfillInstallationVerifications(db, {
+      actor,
+      from: 1_700_000_000,
+      to: 1_700_200_000,
+      dryRun: true,
+    });
+    expect(preview).toMatchObject({ confirmedInstalls: 1, eligible: 1, created: 0 });
+    expect(db.select().from(verifications).all()).toHaveLength(0);
+
+    const applied = backfillInstallationVerifications(db, {
+      actor,
+      from: 1_700_000_000,
+      to: 1_700_200_000,
+    });
+    expect(applied.created).toBe(1);
+    expect(db.select().from(verifications).all()).toHaveLength(1);
+
+    const repeated = backfillInstallationVerifications(db, {
+      actor,
+      from: 1_700_000_000,
+      to: 1_700_200_000,
+    });
+    expect(repeated).toMatchObject({ eligible: 0, created: 0, alreadyVerified: 1 });
+
+    const outsideRange = backfillInstallationVerifications(db, {
+      actor,
+      from: 1_700_200_001,
+      to: 1_700_300_000,
+      dryRun: true,
+    });
+    expect(outsideRange.confirmedInstalls).toBe(0);
   });
 });
