@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { eq, isNull, and } from 'drizzle-orm';
-import { slotPairings, truckAssignments, devices } from '../../db/schema';
+import { slotPairings, truckAssignments, devices, verifications } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck } from '../../tests/helpers/fixtures';
 import { registerKit } from '../registration.service';
@@ -191,5 +191,55 @@ describe('installation.service', () => {
     expect(firstPage.items).toHaveLength(1);
     expect(secondPage.items).toHaveLength(1);
     expect(searchPage.total).toBe(2);
+  });
+
+  it('automatically verifies completed installs but not failed installs', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'AUTO123AB');
+    const kit = registerKit(db, {
+      orgId,
+      actorUserId: installerId,
+      motherSerial: 'AUTO-MOTHER',
+      subSerials: ['AUTO-SUB-B', 'AUTO-SUB-C', 'AUTO-SUB-D'],
+      simNumber: '2348044444444',
+    });
+
+    const completed = installKit(db, {
+      orgId,
+      actorUserId: installerId,
+      truckId,
+      motherDeviceId: kit.motherDeviceId,
+      subDeviceIds: kit.subDeviceIds as [string, string, string],
+      company: 'mrs',
+      checklist: { overallStatus: 'successful' },
+      loggedDate: 1_700_000_000,
+    });
+
+    const verification = db.select().from(verifications).where(eq(verifications.id, completed.verificationId!)).get()!;
+    expect(verification).toMatchObject({
+      truckId,
+      motherDeviceId: kit.motherDeviceId,
+      result: 'match',
+      weakestTier: 'manual',
+      verifiedAt: 1_700_000_000,
+    });
+    expect(JSON.parse(verification.observedSubsJson)).toEqual([
+      'AUTO-SUB-B',
+      'AUTO-SUB-C',
+      'AUTO-SUB-D',
+    ]);
+
+    const failed = recordInstallation(db, {
+      installMode: 'same_kit',
+      orgId,
+      actorUserId: installerId,
+      truckId,
+      motherDeviceId: kit.motherDeviceId,
+      subDeviceIds: kit.subDeviceIds as [string, string, string],
+      checklist: { overallStatus: 'failed' },
+    });
+    expect(failed.verificationId).toBeNull();
+    expect(db.select().from(verifications).all()).toHaveLength(1);
   });
 });

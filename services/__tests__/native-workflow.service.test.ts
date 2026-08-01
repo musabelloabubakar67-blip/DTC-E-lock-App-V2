@@ -7,6 +7,7 @@ import {
   slotPairings,
   truckAssignments,
   trucks,
+  verifications,
 } from '../../db/schema';
 import { recordKitVerificationSchema } from '../../lib/validations/verification';
 import { createTestDb } from '../../tests/helpers/testDb';
@@ -42,7 +43,7 @@ describe('native installation workflow', () => {
     const { orgId, installerId } = seedBaseFixtures(db);
     const kit = registerTestKit(db, orgId, installerId, 'NEW');
 
-    recordNativeInstallation(db, {
+    const result = recordNativeInstallation(db, {
       orgId,
       actorUserId: installerId,
       payload: {
@@ -51,6 +52,7 @@ describe('native installation workflow', () => {
         subSerials: kit.subDeviceIds.map((id) => serialOf(db, id)) as [string, string, string],
         company: 'mrs',
         installMode: 'changed',
+        checklist: { overallStatus: 'successful' },
       },
     });
 
@@ -63,6 +65,8 @@ describe('native installation workflow', () => {
         .where(and(eq(truckAssignments.truckId, truck.id), isNull(truckAssignments.removedAt)))
         .get()!.deviceId,
     ).toBe(kit.motherDeviceId);
+    expect(result.verificationId).toBeTruthy();
+    expect(db.select().from(verifications).where(eq(verifications.truckId, truck.id)).all()).toHaveLength(1);
   });
 
   it('applies a scanned changed kit without creating a review', () => {

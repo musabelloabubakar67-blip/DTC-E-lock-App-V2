@@ -18,6 +18,7 @@ import {
   trucks,
   users,
   truckCompanyAssignments,
+  verifications,
 } from '../db/schema';
 import { BusinessError } from '../lib/errors';
 import { checkIncomingDeviceConflict, assertConflictProceeds } from './movement.service';
@@ -67,6 +68,7 @@ export type InstallKitResult = {
   assignmentId: string;
   slotPairingIds: string[];
   installationLogId: string;
+  verificationId: string | null;
   // Present only when this install actually wrote a new truck_company_assignments row (§6:
   // "no change" → no write → this stays null, not just omitted, so callers can tell the
   // difference between "unchanged" and "not applicable").
@@ -98,6 +100,71 @@ export function recordInstallation(db: DbClient, input: InstallKitInput): Instal
   }
 
   return installKit(db, input);
+}
+
+function recordAutomaticInstallationVerification(
+  tx: DbClient,
+  input: InstallKitInput,
+  installationLogId: string,
+  verifiedAt: number,
+): string | null {
+  const status = input.checklist?.overallStatus;
+  if (status !== 'successful' && status !== 'completed_with_issues') return null;
+
+  const mother = tx
+    .select({ serial: devices.serial })
+    .from(devices)
+    .where(eq(devices.id, input.motherDeviceId))
+    .get() as { serial: string } | undefined;
+  const observedSubs = input.subDeviceIds.map((deviceId) => {
+    const sub = tx
+      .select({ serial: devices.serial })
+      .from(devices)
+      .where(eq(devices.id, deviceId))
+      .get() as { serial: string } | undefined;
+    if (!sub) throw new BusinessError(`Sub-lock device ${deviceId} not found during automatic verification`);
+    return sub.serial;
+  });
+  if (!mother) throw new BusinessError(`Mother device ${input.motherDeviceId} not found during automatic verification`);
+
+  const verificationId = createId();
+  tx.insert(verifications)
+    .values({
+      id: verificationId,
+      orgId: input.orgId,
+      truckId: input.truckId,
+      motherDeviceId: input.motherDeviceId,
+      source: 'manual',
+      result: 'match',
+      observedMaster: mother.serial,
+      observedSubsJson: JSON.stringify(observedSubs),
+      weakestTier: 'manual',
+      verifiedBy: input.actorUserId,
+      verifiedAt,
+      notes: `Automatically verified by completed installation ${installationLogId}`,
+    })
+    .run();
+
+  tx.insert(auditLog)
+    .values({
+      id: createId(),
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      entityTable: 'verifications',
+      entityId: verificationId,
+      operation: 'create',
+      afterJson: JSON.stringify({
+        motherDeviceId: input.motherDeviceId,
+        truckId: input.truckId,
+        result: 'match',
+        weakestTier: 'manual',
+        via: 'completed_installation',
+        installationLogId,
+      }),
+    })
+    .run();
+
+  return verificationId;
 }
 
 function recordSameKitInstallation(db: DbClient, input: InstallKitInput): InstallKitResult {
@@ -170,7 +237,9 @@ function recordSameKitInstallation(db: DbClient, input: InstallKitInput): Instal
       })
       .run();
 
-    return { assignmentId: assignment.id, slotPairingIds, installationLogId, truckCompanyAssignmentId: null };
+    const verificationId = recordAutomaticInstallationVerification(tx, input, installationLogId, loggedDate);
+
+    return { assignmentId: assignment.id, slotPairingIds, installationLogId, verificationId, truckCompanyAssignmentId: null };
   });
 }
 
@@ -322,7 +391,9 @@ export function installKit(db: DbClient, input: InstallKitInput): InstallKitResu
       })
       .run();
 
-    return { assignmentId, slotPairingIds, installationLogId, truckCompanyAssignmentId };
+    const verificationId = recordAutomaticInstallationVerification(tx, input, installationLogId, loggedDate);
+
+    return { assignmentId, slotPairingIds, installationLogId, verificationId, truckCompanyAssignmentId };
   });
 }
 
