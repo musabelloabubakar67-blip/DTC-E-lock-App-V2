@@ -35,7 +35,7 @@ export type RegisterIncompleteKitInput = {
   actor: AuthenticatedUser;
   motherSerial: string;
   subSerials: string[];
-  simNumber: string;
+  simNumber?: string;
   notes?: string;
   loggedDate?: number;
 };
@@ -197,7 +197,7 @@ export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKit
         orgId: input.actor.orgId,
         deviceType: 'mother',
         serial: motherSerial,
-        simNumber: input.simNumber,
+        simNumber: input.simNumber ?? null,
         lifecycleStatus: 'available',
         registeredAt: loggedDate,
         registeredBy: input.actor.id,
@@ -242,7 +242,7 @@ export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKit
         motherDeviceId,
         actorUserId: input.actor.id,
         loggedDate,
-        simNumber: input.simNumber,
+        simNumber: input.simNumber ?? null,
         source: 'import',
         notes,
       })

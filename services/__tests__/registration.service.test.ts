@@ -141,7 +141,6 @@ describe('registration.service', () => {
       actor,
       motherSerial: '123456789012',
       subSerials: [],
-      simNumber: '08012345678',
     });
     const partial = registerIncompleteKit(db, {
       actor,
@@ -151,6 +150,7 @@ describe('registration.service', () => {
     });
 
     expect(motherOnly.subDeviceIds).toHaveLength(0);
+    expect(db.select().from(devices).where(eq(devices.id, motherOnly.motherDeviceId)).get()?.simNumber).toBeNull();
     expect(partial.subDeviceIds).toHaveLength(2);
     expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, motherOnly.motherDeviceId)).all()).toHaveLength(0);
     expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, partial.motherDeviceId)).all()).toHaveLength(2);

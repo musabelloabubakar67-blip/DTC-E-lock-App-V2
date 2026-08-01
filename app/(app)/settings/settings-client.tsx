@@ -360,8 +360,8 @@ function IncompleteRegistrationPanel() {
           <input name="motherSerial" inputMode="numeric" required />
         </label>
         <label>
-          <span>SIM number</span>
-          <input name="simNumber" inputMode="numeric" required />
+          <span>SIM number (optional)</span>
+          <input name="simNumber" inputMode="numeric" />
         </label>
         {(['B', 'C', 'D'] as const).map((slot) => (
           <label key={slot}>
