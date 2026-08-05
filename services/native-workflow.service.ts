@@ -4,7 +4,9 @@ import { z } from 'zod';
 import {
   auditLog,
   devices,
+  kitMembers,
   movementLogs,
+  registrationLogs,
   slotPairings,
   truckAssignments,
   trucks,
@@ -30,6 +32,16 @@ export const nativeInstallSchema = z.object({
   ]),
   company: z.enum(['mrs', 'dangote']),
   checklist: installChecklistSchema.optional(),
+}).superRefine((value, ctx) => {
+  const serials = [value.motherSerial, ...value.subSerials]
+    .map((serial) => serial.trim().toUpperCase());
+  if (new Set(serials).size !== serials.length) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'Mother and sub-lock serials must all be distinct',
+      path: ['subSerials'],
+    });
+  }
 });
 
 export const nativeFaultSchema = createFaultReportSchema
@@ -49,7 +61,7 @@ function writeAudit(
     actorUserId: string;
     entityTable: string;
     entityId: string;
-    operation: 'create' | 'transition';
+    operation: 'create' | 'correct' | 'transition';
     before?: unknown;
     after: unknown;
   },
@@ -66,6 +78,192 @@ function writeAudit(
       afterJson: JSON.stringify(params.after),
     })
     .run();
+}
+
+type ScannedDevice = {
+  id: string;
+  orgId: string;
+  serial: string;
+  deviceType: string;
+};
+
+function resolveIncompleteRegisteredKit(
+  tx: DbClient,
+  params: {
+    orgId: string;
+    actorUserId: string;
+    mother: ScannedDevice;
+    subSerials: [string, string, string];
+    bySerial: Map<string, ScannedDevice>;
+  },
+): { subs: ScannedDevice[]; addedSubSerials: string[] } {
+  const memberships = tx
+    .select({ id: kitMembers.id, subDeviceId: kitMembers.subDeviceId })
+    .from(kitMembers)
+    .where(and(
+      eq(kitMembers.orgId, params.orgId),
+      eq(kitMembers.motherDeviceId, params.mother.id),
+      isNull(kitMembers.removedAt),
+    ))
+    .all() as Array<{ id: string; subDeviceId: string }>;
+  const memberIds = new Set(memberships.map((membership) => membership.subDeviceId));
+  const knownSubs: ScannedDevice[] = [];
+  const unknownSerials: string[] = [];
+
+  for (const serial of params.subSerials) {
+    const device = params.bySerial.get(serial);
+    if (!device) {
+      unknownSerials.push(serial);
+      continue;
+    }
+    if (device.orgId !== params.orgId) {
+      throw new BusinessError(`Sub-lock ${serial} is registered to another organisation`);
+    }
+    if (device.deviceType !== 'sub') {
+      throw new BusinessError(`Serial ${serial} is registered as a mother lock, not a sub-lock`);
+    }
+    knownSubs.push(device);
+  }
+
+  // Preserve the existing safe-override behavior for complete registered kits: replacements and
+  // historical kit movement can legitimately make physical slot membership differ from birth
+  // registration membership. Strict membership matching applies only while completing an
+  // incomplete registration.
+  if (unknownSerials.length === 0 && memberships.length >= 3) {
+    return { subs: knownSubs, addedSubSerials: [] };
+  }
+
+  const registration = tx
+    .select({ id: registrationLogs.id })
+    .from(registrationLogs)
+    .where(and(
+      eq(registrationLogs.orgId, params.orgId),
+      eq(registrationLogs.motherDeviceId, params.mother.id),
+    ))
+    .get() as { id: string } | undefined;
+  if (!registration && unknownSerials.length === 0) {
+    return { subs: knownSubs, addedSubSerials: [] };
+  }
+  if (!registration || memberships.length >= 3) {
+    throw new BusinessError(
+      unknownSerials.length > 0
+        ? `Sub-lock ${unknownSerials[0]} was not found. Kit ${params.mother.serial} is not an incomplete registration`
+        : `Kit ${params.mother.serial} is not an incomplete registration`,
+    );
+  }
+
+  for (const device of knownSubs) {
+    if (memberIds.has(device.id)) continue;
+    const otherMembership = tx
+      .select({ motherDeviceId: kitMembers.motherDeviceId })
+      .from(kitMembers)
+      .where(and(eq(kitMembers.subDeviceId, device.id), isNull(kitMembers.removedAt)))
+      .get() as { motherDeviceId: string } | undefined;
+    const otherMother = otherMembership
+      ? tx.select({ serial: devices.serial }).from(devices).where(eq(devices.id, otherMembership.motherDeviceId)).get()
+      : undefined;
+    if (otherMother) {
+      throw new BusinessError(
+        `Sub-lock ${device.serial} is registered to kit ${otherMother.serial} and cannot complete kit ${params.mother.serial}`,
+      );
+    }
+    throw new BusinessError(
+      `Sub-lock ${device.serial} is already registered and is not part of incomplete kit ${params.mother.serial}`,
+    );
+  }
+
+  const missingSlots = 3 - memberships.length;
+  if (unknownSerials.length !== missingSlots || knownSubs.length !== memberships.length) {
+    throw new BusinessError(
+      `Kit ${params.mother.serial} has ${memberships.length} registered sub-lock(s). Scan those same sub-locks and exactly ${missingSlots} missing physical sub-lock(s) to complete it`,
+    );
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const addedSubs: ScannedDevice[] = [];
+  for (const serial of unknownSerials) {
+    const device: ScannedDevice = {
+      id: createId(),
+      orgId: params.orgId,
+      serial,
+      deviceType: 'sub',
+    };
+    tx.insert(devices)
+      .values({
+        id: device.id,
+        orgId: params.orgId,
+        deviceType: 'sub',
+        serial,
+        lifecycleStatus: 'available',
+        registeredAt: now,
+        registeredBy: params.actorUserId,
+        origin: 'discovered',
+        notes: `Physically scanned while completing incomplete kit ${params.mother.serial} during installation`,
+      })
+      .run();
+    writeAudit(tx, {
+      orgId: params.orgId,
+      actorUserId: params.actorUserId,
+      entityTable: 'devices',
+      entityId: device.id,
+      operation: 'create',
+      after: {
+        serial,
+        deviceType: 'sub',
+        lifecycleStatus: 'available',
+        origin: 'discovered',
+        via: 'incomplete_kit_installation',
+        motherSerial: params.mother.serial,
+      },
+    });
+
+    const membershipId = createId();
+    tx.insert(kitMembers)
+      .values({
+        id: membershipId,
+        orgId: params.orgId,
+        motherDeviceId: params.mother.id,
+        subDeviceId: device.id,
+        addedAt: now,
+      })
+      .run();
+    writeAudit(tx, {
+      orgId: params.orgId,
+      actorUserId: params.actorUserId,
+      entityTable: 'kit_members',
+      entityId: membershipId,
+      operation: 'create',
+      after: {
+        motherDeviceId: params.mother.id,
+        motherSerial: params.mother.serial,
+        subDeviceId: device.id,
+        subSerial: serial,
+        via: 'incomplete_kit_installation',
+      },
+    });
+    addedSubs.push(device);
+  }
+
+  writeAudit(tx, {
+    orgId: params.orgId,
+    actorUserId: params.actorUserId,
+    entityTable: 'registration_logs',
+    entityId: registration.id,
+    operation: 'correct',
+    before: { complete: false, registeredSubCount: memberships.length },
+    after: {
+      complete: true,
+      registeredSubCount: 3,
+      addedSubSerials: unknownSerials,
+      via: 'incomplete_kit_installation',
+    },
+  });
+
+  const addedBySerial = new Map(addedSubs.map((device) => [device.serial, device]));
+  return {
+    subs: params.subSerials.map((serial) => params.bySerial.get(serial) ?? addedBySerial.get(serial)!),
+    addedSubSerials: unknownSerials,
+  };
 }
 
 function createInstallTruck(
@@ -382,6 +580,9 @@ export function recordNativeInstallation(
   const truckPlate = params.payload.truckPlate.toUpperCase();
   const motherSerial = params.payload.motherSerial.toUpperCase();
   const subSerials = params.payload.subSerials.map((serial) => serial.toUpperCase()) as [string, string, string];
+  if (new Set([motherSerial, ...subSerials]).size !== 4) {
+    throw new BusinessError('Mother and sub-lock serials must all be distinct');
+  }
   return db.transaction((tx: DbClient) => {
     const truck = tx
       .select({ id: trucks.id })
@@ -393,20 +594,25 @@ export function recordNativeInstallation(
         plate: truckPlate,
       });
 
-    const kitDevices: { id: string; serial: string; deviceType: string }[] = tx
-      .select({ id: devices.id, serial: devices.serial, deviceType: devices.deviceType })
+    const kitDevices: ScannedDevice[] = tx
+      .select({ id: devices.id, orgId: devices.orgId, serial: devices.serial, deviceType: devices.deviceType })
       .from(devices)
-      .where(and(eq(devices.orgId, params.orgId), inArray(devices.serial, [motherSerial, ...subSerials])))
+      .where(inArray(devices.serial, [motherSerial, ...subSerials]))
       .all();
     const bySerial = new Map(kitDevices.map((device) => [device.serial.toUpperCase(), device]));
     const mother = bySerial.get(motherSerial);
-    if (!mother || mother.deviceType !== 'mother') throw new BusinessError(`Mother lock ${motherSerial} was not found`);
+    if (!mother || mother.orgId !== params.orgId || mother.deviceType !== 'mother') {
+      throw new BusinessError(`Mother lock ${motherSerial} was not found`);
+    }
 
-    const subs = subSerials.map((serial) => {
-      const device = bySerial.get(serial);
-      if (!device || device.deviceType !== 'sub') throw new BusinessError(`Sub-lock ${serial} was not found`);
-      return device;
+    const completedKit = resolveIncompleteRegisteredKit(tx, {
+      orgId: params.orgId,
+      actorUserId: params.actorUserId,
+      mother,
+      subSerials,
+      bySerial,
     });
+    const subs = completedKit.subs;
 
     if (params.payload.installMode === 'changed') {
       closeCurrentKitForScannedInstall(tx, {
@@ -424,7 +630,7 @@ export function recordNativeInstallation(
       });
     }
 
-    return recordInstallation(tx, {
+    const result = recordInstallation(tx, {
       orgId: params.orgId,
       actorUserId: params.actorUserId,
       installMode: params.payload.installMode,
@@ -434,6 +640,7 @@ export function recordNativeInstallation(
       company: params.payload.company,
       checklist: params.payload.checklist,
     });
+    return { ...result, completedRegistrationSubSerials: completedKit.addedSubSerials };
   });
 }
 

@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { and, eq, isNull } from 'drizzle-orm';
 import {
+  auditLog,
   conflictReviews,
   devices,
+  kitMembers,
   movementLogs,
   slotPairings,
   truckAssignments,
@@ -14,7 +16,7 @@ import { createTestDb } from '../../tests/helpers/testDb';
 import { createTruck, seedBaseFixtures } from '../../tests/helpers/fixtures';
 import { installKit } from '../installation.service';
 import { recordNativeInstallation } from '../native-workflow.service';
-import { registerKit } from '../registration.service';
+import { registerIncompleteKit, registerKit } from '../registration.service';
 import { listOpenConflictReviews } from '../review.service';
 import { applySyncBatch } from '../sync.service';
 
@@ -67,6 +69,106 @@ describe('native installation workflow', () => {
     ).toBe(kit.motherDeviceId);
     expect(result.verificationId).toBeTruthy();
     expect(db.select().from(verifications).where(eq(verifications.truckId, truck.id)).all()).toHaveLength(1);
+  });
+
+  it('completes an incomplete registered kit from its missing physical scan and installs atomically', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
+    const partial = registerIncompleteKit(db, {
+      actor: { id: supervisorId, orgId, role: 'supervisor' },
+      motherSerial: 'PARTIAL-MOTHER',
+      subSerials: ['PARTIAL-SUB-B', 'PARTIAL-SUB-C'],
+      notes: 'Third sub-lock was not captured in the source registration file',
+    });
+
+    const result = recordNativeInstallation(db, {
+      orgId,
+      actorUserId: installerId,
+      payload: {
+        truckPlate: 'FZE 185 DI',
+        motherSerial: 'partial-mother',
+        subSerials: ['partial-sub-b', 'partial-sub-c', 'partial-sub-d'],
+        company: 'mrs',
+        installMode: 'changed',
+        checklist: { overallStatus: 'successful' },
+      },
+    });
+
+    const added = db.select().from(devices).where(eq(devices.serial, 'PARTIAL-SUB-D')).get()!;
+    const truck = db.select().from(trucks).where(eq(trucks.plate, 'FZE 185 DI')).get()!;
+    expect(result.completedRegistrationSubSerials).toEqual(['PARTIAL-SUB-D']);
+    expect(added).toMatchObject({
+      deviceType: 'sub',
+      origin: 'discovered',
+      lifecycleStatus: 'in_service',
+      registeredBy: installerId,
+    });
+    expect(
+      db
+        .select()
+        .from(kitMembers)
+        .where(and(eq(kitMembers.motherDeviceId, partial.motherDeviceId), isNull(kitMembers.removedAt)))
+        .all(),
+    ).toHaveLength(3);
+    expect(
+      db
+        .select()
+        .from(slotPairings)
+        .where(and(eq(slotPairings.motherDeviceId, partial.motherDeviceId), isNull(slotPairings.unpairedAt)))
+        .all(),
+    ).toHaveLength(3);
+    expect(
+      db
+        .select()
+        .from(truckAssignments)
+        .where(and(eq(truckAssignments.truckId, truck.id), isNull(truckAssignments.removedAt)))
+        .get()!.deviceId,
+    ).toBe(partial.motherDeviceId);
+    expect(result.verificationId).toBeTruthy();
+    expect(
+      db
+        .select()
+        .from(auditLog)
+        .where(and(eq(auditLog.entityTable, 'registration_logs'), eq(auditLog.operation, 'correct')))
+        .all()
+        .some((row) => JSON.parse(row.afterJson).via === 'incomplete_kit_installation'),
+    ).toBe(true);
+    expect(db.select().from(conflictReviews).all()).toHaveLength(0);
+  });
+
+  it('rejects a registered sub-lock from another kit without writing a partial install', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
+    const partial = registerIncompleteKit(db, {
+      actor: { id: supervisorId, orgId, role: 'supervisor' },
+      motherSerial: 'TARGET-MOTHER',
+      subSerials: ['TARGET-SUB-B', 'TARGET-SUB-C'],
+    });
+    registerTestKit(db, orgId, installerId, 'OTHER');
+
+    expect(() => recordNativeInstallation(db, {
+      orgId,
+      actorUserId: installerId,
+      payload: {
+        truckPlate: 'BLOCK101',
+        motherSerial: 'TARGET-MOTHER',
+        subSerials: ['TARGET-SUB-B', 'TARGET-SUB-C', 'OTHER-SUB-B'],
+        company: 'mrs',
+        installMode: 'changed',
+      },
+    })).toThrow(
+      'Sub-lock OTHER-SUB-B is registered to kit OTHER-MOTHER and cannot complete kit TARGET-MOTHER',
+    );
+
+    expect(db.select().from(trucks).where(eq(trucks.plate, 'BLOCK101')).all()).toHaveLength(0);
+    expect(
+      db
+        .select()
+        .from(kitMembers)
+        .where(and(eq(kitMembers.motherDeviceId, partial.motherDeviceId), isNull(kitMembers.removedAt)))
+        .all(),
+    ).toHaveLength(2);
+    expect(db.select().from(truckAssignments).all()).toHaveLength(0);
   });
 
   it('applies a scanned changed kit without creating a review', () => {

@@ -2,11 +2,11 @@
 // swap-conflict helper runs on the incoming mother serial FIRST, slots are assigned
 // positionally (C1→B, C2→C, C3→D), device(s) go in_service, all in one transaction.
 //
-// Requires an already-registered `available` mother. There is deliberately NO inline
-// registration at install time (§6) — registration and installation are distinct events (§2),
-// and inline registration would fabricate a kit with no sub-pairing/config/sim. An unregistered
-// handheld device goes through register-then-install; a device found already mounted with no
-// registration record is handled by the verification mismatch flow (§3), not by this function.
+// Requires an already-registered `available` mother and three registered subs. Arbitrary inline
+// registration remains forbidden here. The serial-based native workflow has one narrow exception:
+// it may complete an existing incomplete registration from physical scans before calling this
+// function, with membership, global-serial, audit, install, and verification writes in one outer
+// transaction.
 import { and, desc, eq, gte, inArray, isNull, lte } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import {
