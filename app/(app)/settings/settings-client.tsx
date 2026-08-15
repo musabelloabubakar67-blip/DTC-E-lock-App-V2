@@ -395,6 +395,24 @@ function InstallationVerificationBackfillPanel() {
 function IncompleteRegistrationPanel() {
   const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [sweeping, setSweeping] = useState(false);
+  const [sweepStatus, setSweepStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+
+  async function runOrphanSweep() {
+    setSweeping(true);
+    setSweepStatus(null);
+    try {
+      const response = await fetch('/api/registrations/orphan-sweep', { method: 'POST' });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Orphan sweep failed');
+      const count = payload?.data?.assignedCount ?? 0;
+      setSweepStatus({ tone: 'success', message: `Assigned ${count} orphan sub-lock${count === 1 ? '' : 's'} to incomplete registrations.` });
+    } catch (error) {
+      setSweepStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Orphan sweep failed' });
+    } finally {
+      setSweeping(false);
+    }
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -458,6 +476,20 @@ function IncompleteRegistrationPanel() {
           {saving ? 'Saving...' : 'Save incomplete registration'}
         </button>
       </form>
+
+      <div className="settings-panel-subsection">
+        <p className="settings-panel-copy">
+          Fill empty slots on incomplete registrations from sub-locks sitting unlinked in inventory (oldest-incomplete-registration first, oldest-orphan first).
+        </p>
+        {sweepStatus && (
+          <p className={`banner ${sweepStatus.tone === 'error' ? 'banner--error' : 'banner--success'}`}>
+            {sweepStatus.message}
+          </p>
+        )}
+        <button className="btn btn--secondary" type="button" onClick={runOrphanSweep} disabled={sweeping}>
+          {sweeping ? 'Sweeping...' : 'Run orphan sub-lock sweep'}
+        </button>
+      </div>
     </Panel>
   );
 }
