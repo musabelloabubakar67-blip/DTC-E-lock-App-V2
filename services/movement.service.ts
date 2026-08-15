@@ -4,7 +4,7 @@
 // audit_log row per action, inside one transaction each (§7 transaction pattern).
 import { eq, and, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { devices, truckAssignments, slotPairings, movementLogs, auditLog, truckCompanyAssignments } from '../db/schema';
+import { devices, trucks, truckAssignments, slotPairings, movementLogs, auditLog, truckCompanyAssignments } from '../db/schema';
 import { BusinessError, assertNever } from '../lib/errors';
 import {
   applyRemoval,
@@ -741,6 +741,94 @@ export function changeTruckCompany(
 }
 
 // ---------------------------------------------------------------------------
+// Serial/plate resolution — every function above this point expects already-resolved
+// internal ids (truckAssignments.deviceId/truckId are FKs to devices.id/trucks.id, never
+// the printed serial or plate). But every producer of a MovementActionFormValues — the
+// movement/page.tsx form (scan or manual entry) and the Lookup page's "Reassign or replace"
+// link (?device=<serial>) — only ever hands over the human-readable serial/plate. Resolve
+// here, once, at the shared dispatch choke point, so every caller (API route + sync.service's
+// offline replay) gets it for free. Mirrors the id-or-reference pattern already used by
+// repair.service.ts's executeRepairBatch for trucks.
+// ---------------------------------------------------------------------------
+
+function normalizeReference(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+function resolveTruckId(db: DbClient, orgId: string, plateOrId: string): string {
+  const reference = plateOrId.trim();
+  const byId = db.select({ id: trucks.id }).from(trucks).where(and(eq(trucks.orgId, orgId), eq(trucks.id, reference))).get() as
+    | { id: string }
+    | undefined;
+  if (byId) return byId.id;
+
+  const byPlate = db
+    .select({ id: trucks.id })
+    .from(trucks)
+    .where(and(eq(trucks.orgId, orgId), eq(trucks.plate, normalizeReference(reference))))
+    .get() as { id: string } | undefined;
+  if (!byPlate) throw new BusinessError(`Truck ${normalizeReference(reference)} is not registered`);
+  return byPlate.id;
+}
+
+function resolveDeviceId(db: DbClient, orgId: string, serialOrId: string): string {
+  const reference = serialOrId.trim();
+  const byId = db.select({ id: devices.id }).from(devices).where(and(eq(devices.orgId, orgId), eq(devices.id, reference))).get() as
+    | { id: string }
+    | undefined;
+  if (byId) return byId.id;
+
+  const bySerial = db
+    .select({ id: devices.id })
+    .from(devices)
+    .where(and(eq(devices.orgId, orgId), eq(devices.serial, normalizeReference(reference))))
+    .get() as { id: string } | undefined;
+  if (!bySerial) throw new BusinessError(`Device ${normalizeReference(reference)} not found`);
+  return bySerial.id;
+}
+
+/** Resolves every truck-plate/device-serial field on the action to its internal id. */
+function resolveMovementActionIds(
+  db: DbClient,
+  orgId: string,
+  action: MovementActionFormValues,
+): MovementActionFormValues {
+  switch (action.kind) {
+    case 'new_assignment':
+      return {
+        ...action,
+        truckId: resolveTruckId(db, orgId, action.truckId),
+        motherDeviceId: resolveDeviceId(db, orgId, action.motherDeviceId),
+      };
+    case 'removed_to_inventory':
+      return { ...action, motherDeviceId: resolveDeviceId(db, orgId, action.motherDeviceId) };
+    case 'decommissioned':
+      return { ...action, motherDeviceId: resolveDeviceId(db, orgId, action.motherDeviceId) };
+    case 'mother_replacement':
+      return {
+        ...action,
+        truckId: resolveTruckId(db, orgId, action.truckId),
+        newMotherDeviceId: resolveDeviceId(db, orgId, action.newMotherDeviceId),
+      };
+    case 'sub_replacement':
+      return {
+        ...action,
+        truckId: resolveTruckId(db, orgId, action.truckId),
+        motherDeviceId: resolveDeviceId(db, orgId, action.motherDeviceId),
+        newSubDeviceId: resolveDeviceId(db, orgId, action.newSubDeviceId),
+      };
+    case 'truck_swap':
+      return {
+        ...action,
+        deviceId: resolveDeviceId(db, orgId, action.deviceId),
+        toTruckId: resolveTruckId(db, orgId, action.toTruckId),
+      };
+    default:
+      return assertNever(action, 'resolveMovementActionIds');
+  }
+}
+
+// ---------------------------------------------------------------------------
 // dispatchMovementAction — the ONE place that maps a validated MovementActionFormValues onto
 // the matching function above. Both app/api/movements/route.ts and sync.service.ts (offline
 // replay) call this instead of duplicating the switch — "services already exist, reuse them."
@@ -750,7 +838,8 @@ export function dispatchMovementAction(
   db: DbClient,
   params: { orgId: string; actorUserId: string; action: MovementActionFormValues },
 ): unknown {
-  const { action, orgId, actorUserId } = params;
+  const { orgId, actorUserId } = params;
+  const action = resolveMovementActionIds(db, orgId, params.action);
 
   switch (action.kind) {
     case 'new_assignment':

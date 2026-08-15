@@ -4,7 +4,68 @@ import { createId } from '@paralleldrive/cuid2';
 import { truckAssignments, movementLogs, devices } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
-import { checkIncomingDeviceConflict, resolveTruckSwap } from '../movement.service';
+import { checkIncomingDeviceConflict, resolveTruckSwap, dispatchMovementAction } from '../movement.service';
+
+describe('movement.service — dispatchMovementAction resolves plate/serial inputs', () => {
+  it('new_assignment: accepts a truck plate and device serial, not just internal ids', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    createTruck(db, orgId, 'FZE900DI');
+    createDevice(db, orgId, { type: 'mother', serial: 'PLATE-MOM-1' });
+
+    dispatchMovementAction(db, {
+      orgId,
+      actorUserId: installerId,
+      action: { kind: 'new_assignment', truckId: 'fze900di', motherDeviceId: 'plate-mom-1' },
+    });
+
+    const device = db.select().from(devices).where(eq(devices.serial, 'PLATE-MOM-1')).get()!;
+    const assignment = db
+      .select()
+      .from(truckAssignments)
+      .where(and(eq(truckAssignments.deviceId, device.id), isNull(truckAssignments.removedAt)))
+      .get();
+    expect(assignment).toBeTruthy();
+  });
+
+  it('truck_swap: accepts a device serial and destination truck plate, not just internal ids', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckA = createTruck(db, orgId, 'FZE901DI');
+    createTruck(db, orgId, 'FZE902DI');
+    const deviceId = createDevice(db, orgId, { type: 'mother', serial: 'PLATE-MOM-2', status: 'in_service' });
+    db.insert(truckAssignments)
+      .values({ id: createId(), orgId, truckId: truckA, deviceId, assignedAt: Math.floor(Date.now() / 1000), assignedBy: installerId })
+      .run();
+
+    dispatchMovementAction(db, {
+      orgId,
+      actorUserId: installerId,
+      action: { kind: 'truck_swap', deviceId: 'PLATE-MOM-2', toTruckId: 'FZE902DI' },
+    });
+
+    const live = db
+      .select()
+      .from(truckAssignments)
+      .where(and(eq(truckAssignments.deviceId, deviceId), isNull(truckAssignments.removedAt)))
+      .get()!;
+    const newTruck = db.select().from(truckAssignments).where(eq(truckAssignments.id, live.id)).get()!;
+    expect(newTruck.truckId).not.toBe(truckA);
+  });
+
+  it('rejects an unregistered serial/plate with a clear error, not a silent id mismatch', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+
+    expect(() =>
+      dispatchMovementAction(db, {
+        orgId,
+        actorUserId: installerId,
+        action: { kind: 'new_assignment', truckId: 'GHOST-PLATE', motherDeviceId: 'GHOST-SERIAL' },
+      }),
+    ).toThrow(/GHOST-PLATE is not registered/);
+  });
+});
 
 describe('movement.service — swap-conflict helper', () => {
   it('claim 4: a device in_service on another truck is blocked, and truck_swap moves both sides in one transaction', () => {
