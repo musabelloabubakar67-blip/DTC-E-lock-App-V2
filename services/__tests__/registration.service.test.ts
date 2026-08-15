@@ -3,8 +3,9 @@ import { eq, isNull, and } from 'drizzle-orm';
 import { kitMembers, devices, registrationLogs, slotPairings } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures } from '../../tests/helpers/fixtures';
-import { listRegistrationsPage, registerIncompleteKit, registerKit } from '../registration.service';
+import { listRegistrationsPage, registerIncompleteKit, registerKit, autoAssignOrphanSubs } from '../registration.service';
 import { AuthzError, BusinessError } from '../../lib/errors';
+import { createDevice } from '../../tests/helpers/fixtures';
 
 describe('registration.service', () => {
   it('writes an unslotted kit: mother + 3 subs, all available, kit_members open with no slot', () => {
@@ -156,6 +157,68 @@ describe('registration.service', () => {
     expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, partial.motherDeviceId)).all()).toHaveLength(2);
     expect(db.select().from(registrationLogs).where(eq(registrationLogs.id, partial.registrationLogId)).get()?.source).toBe('import');
     expect(db.select().from(devices).where(eq(devices.id, partial.motherDeviceId)).get()?.importUnverified).toBe(1);
+  });
+
+  it('auto-fills an incomplete registration from the orphan sub pool, FIFO, on creation', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    // A stray sub-lock already sitting in inventory, never linked to any kit — the physical
+    // "turns up but the registration never had it" case.
+    const orphanSubId = createDevice(db, orgId, { type: 'sub', serial: 'ORPHAN000001' });
+
+    const partial = registerIncompleteKit(db, {
+      actor,
+      motherSerial: '345678901234',
+      subSerials: ['AABBCCDDEEFF', '112233445566'],
+    });
+
+    // The registration was created with 2 of 3 subs; the orphan should have been swept in
+    // automatically to fill the last slot.
+    expect(partial.subDeviceIds).toHaveLength(3);
+    expect(partial.subDeviceIds).toContain(orphanSubId);
+    const membership = db
+      .select()
+      .from(kitMembers)
+      .where(and(eq(kitMembers.subDeviceId, orphanSubId), isNull(kitMembers.removedAt)))
+      .get()!;
+    expect(membership.motherDeviceId).toBe(partial.motherDeviceId);
+  });
+
+  it('does not FIFO-assign an orphan sub that is actively paired on a truck elsewhere', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    // A sub that was scan-discovered and paired to a DIFFERENT mother's truck, but never
+    // linked into kit_members — it has a known, verified home and must not be FIFO-stolen.
+    const pairedSubId = createDevice(db, orgId, { type: 'sub', serial: 'PAIRED000001' });
+    const otherMotherId = createDevice(db, orgId, { type: 'mother', serial: '999999999999' });
+    db.insert(slotPairings)
+      .values({
+        id: 'sp1',
+        orgId,
+        motherDeviceId: otherMotherId,
+        slot: 'B',
+        subDeviceId: pairedSubId,
+        pairedAt: 1_700_000_000,
+        pairedBy: installerId,
+      })
+      .run();
+
+    const partial = registerIncompleteKit(db, {
+      actor,
+      motherSerial: '456789012345',
+      subSerials: ['AABBCCDDEEFF', '112233445566'],
+    });
+
+    expect(partial.subDeviceIds).toHaveLength(2);
+    expect(partial.subDeviceIds).not.toContain(pairedSubId);
+
+    // Sanity: autoAssignOrphanSubs directly also declines to touch it.
+    const { assignedCount } = autoAssignOrphanSubs(db, orgId, supervisorId);
+    expect(assignedCount).toBe(0);
   });
 
   it('rejects incomplete registration imports from installers', () => {

@@ -3,7 +3,7 @@
 // No next/server import here — services are framework-agnostic (§7 layer contract).
 import { and, desc, eq, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { devices, kitMembers, registrationLogs, auditLog, users } from '../db/schema';
+import { devices, kitMembers, slotPairings, registrationLogs, auditLog, users } from '../db/schema';
 import { BusinessError } from '../lib/errors';
 import { requireSupervisor, type AuthenticatedUser } from './auth.service';
 
@@ -189,7 +189,7 @@ export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKit
   const completenessNote = `Incomplete registration import: ${subSerials.length} of 3 sub-locks supplied.`;
   const notes = input.notes ? `${completenessNote} ${input.notes}` : completenessNote;
 
-  return db.transaction((tx: DbClient) => {
+  const result = db.transaction((tx: DbClient) => {
     const motherDeviceId = createId();
     tx.insert(devices)
       .values({
@@ -269,6 +269,127 @@ export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKit
 
     return { motherDeviceId, subDeviceIds, registrationLogId };
   });
+
+  if (result.subDeviceIds.length < 3) {
+    autoAssignOrphanSubs(db, input.actor.orgId, input.actor.id);
+    const openMembers = db
+      .select({ subDeviceId: kitMembers.subDeviceId })
+      .from(kitMembers)
+      .where(and(eq(kitMembers.orgId, input.actor.orgId), eq(kitMembers.motherDeviceId, result.motherDeviceId), isNull(kitMembers.removedAt)))
+      .all() as Array<{ subDeviceId: string }>;
+    result.subDeviceIds = openMembers.map((member) => member.subDeviceId);
+  }
+
+  return result;
+}
+
+/**
+ * Registration is bookkeeping (accounting for devices exist), not the trust-critical layer —
+ * install/verification is. So unlike the verified slot_pairings match in
+ * verification.service.ts's attachOrphanSubToOwnMotherRegistration, this fills incomplete
+ * registrations' empty slots from the orphan pool automatically, oldest-incomplete-registration
+ * first, oldest-orphan first (FIFO) — a best-effort match, not a verified one. Any mismatch is
+ * expected to surface and self-correct at install/verification, which does do a verified match.
+ *
+ * Orphan = a sub device never linked into any kit_members AND not currently on an open
+ * slot_pairings (a sub with a live physical pairing has a known, specific mother — attaching it
+ * to a different mother's registration here would be actively wrong, not just imprecise).
+ */
+export function autoAssignOrphanSubs(db: DbClient, orgId: string, actorUserId: string): { assignedCount: number } {
+  const linkedSubIds = new Set(
+    (db.select({ id: kitMembers.subDeviceId }).from(kitMembers).where(eq(kitMembers.orgId, orgId)).all() as Array<{ id: string }>).map(
+      (r) => r.id,
+    ),
+  );
+  const pairedSubIds = new Set(
+    (
+      db
+        .select({ id: slotPairings.subDeviceId })
+        .from(slotPairings)
+        .where(and(eq(slotPairings.orgId, orgId), isNull(slotPairings.unpairedAt)))
+        .all() as Array<{ id: string }>
+    ).map((r) => r.id),
+  );
+
+  const orphanSubs = (
+    db
+      .select({ id: devices.id, createdAt: devices.createdAt })
+      .from(devices)
+      .where(and(eq(devices.orgId, orgId), eq(devices.deviceType, 'sub')))
+      .orderBy(devices.createdAt)
+      .all() as Array<{ id: string; createdAt: number }>
+  ).filter((device) => !linkedSubIds.has(device.id) && !pairedSubIds.has(device.id));
+
+  if (orphanSubs.length === 0) return { assignedCount: 0 };
+
+  const openCountByMother = new Map<string, number>();
+  for (const member of db
+    .select({ motherDeviceId: kitMembers.motherDeviceId })
+    .from(kitMembers)
+    .where(and(eq(kitMembers.orgId, orgId), isNull(kitMembers.removedAt)))
+    .all() as Array<{ motherDeviceId: string }>) {
+    openCountByMother.set(member.motherDeviceId, (openCountByMother.get(member.motherDeviceId) ?? 0) + 1);
+  }
+
+  const incompleteMothers = (
+    db
+      .select({ motherDeviceId: registrationLogs.motherDeviceId, loggedDate: registrationLogs.loggedDate })
+      .from(registrationLogs)
+      .where(eq(registrationLogs.orgId, orgId))
+      .orderBy(registrationLogs.loggedDate)
+      .all() as Array<{ motherDeviceId: string; loggedDate: number }>
+  )
+    .map((row) => ({ motherDeviceId: row.motherDeviceId, openCount: openCountByMother.get(row.motherDeviceId) ?? 0 }))
+    .filter((row) => row.openCount < 3);
+
+  if (incompleteMothers.length === 0) return { assignedCount: 0 };
+
+  const now = Math.floor(Date.now() / 1000);
+  let orphanIndex = 0;
+  let assignedCount = 0;
+
+  db.transaction((tx: DbClient) => {
+    for (const mother of incompleteMothers) {
+      let needed = 3 - mother.openCount;
+      while (needed > 0 && orphanIndex < orphanSubs.length) {
+        const orphan = orphanSubs[orphanIndex];
+        orphanIndex += 1;
+
+        const kitMemberId = createId();
+        tx.insert(kitMembers)
+          .values({
+            id: kitMemberId,
+            orgId,
+            motherDeviceId: mother.motherDeviceId,
+            subDeviceId: orphan.id,
+            addedAt: now,
+          })
+          .run();
+
+        tx.insert(auditLog)
+          .values({
+            id: createId(),
+            orgId,
+            actorUserId,
+            entityTable: 'kit_members',
+            entityId: kitMemberId,
+            operation: 'correct',
+            afterJson: JSON.stringify({
+              motherDeviceId: mother.motherDeviceId,
+              subDeviceId: orphan.id,
+              via: 'orphan_auto_assign_fifo',
+            }),
+          })
+          .run();
+
+        needed -= 1;
+        assignedCount += 1;
+      }
+      if (orphanIndex >= orphanSubs.length) break;
+    }
+  });
+
+  return { assignedCount };
 }
 
 export function listRegistrations(db: DbClient, orgId: string, limit?: number): RegistrationListItem[] {

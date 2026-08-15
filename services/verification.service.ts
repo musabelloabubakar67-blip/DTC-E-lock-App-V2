@@ -183,7 +183,7 @@ export type RecordKitVerificationResult =
 
 function writeAudit(
   tx: DbClient,
-  params: { orgId: string; actorUserId: string; entityTable: string; entityId: string; operation: 'create' | 'transition'; before?: unknown; after: unknown },
+  params: { orgId: string; actorUserId: string; entityTable: string; entityId: string; operation: 'create' | 'transition' | 'correct'; before?: unknown; after: unknown },
 ): void {
   tx.insert(auditLog)
     .values({
@@ -210,7 +210,7 @@ function writeAudit(
 function ensureDeviceRegisteredInline(
   tx: DbClient,
   params: { orgId: string; actorUserId: string; serial: string; deviceType: 'mother' | 'sub' },
-): { id: string; lifecycleStatus: string } {
+): { id: string; lifecycleStatus: string; origin: 'registered' | 'discovered' } {
   const existing = tx.select().from(devices).where(eq(devices.serial, params.serial)).get();
   if (existing) return existing;
 
@@ -238,7 +238,60 @@ function ensureDeviceRegisteredInline(
     after: { serial: params.serial, deviceType: params.deviceType, via: 'verification_mismatch_inline_registration' },
   });
 
-  return { id, lifecycleStatus: 'available' };
+  return { id, lifecycleStatus: 'available', origin: 'discovered' };
+}
+
+/**
+ * A discovered sub is now known — by the scan that just placed it — to physically belong to
+ * `motherDeviceId`. If that mother's registration is incomplete (< 3 open kit_members), attach
+ * the sub there directly: this is a verified match (reality, not a guess), not the FIFO fallback
+ * used for orphans with no known pairing (see registration.service.ts's autoAssignOrphanSubs).
+ * No-op if the mother's kit is already full or the sub is somehow already a member.
+ */
+function attachOrphanSubToOwnMotherRegistration(
+  tx: DbClient,
+  params: { orgId: string; actorUserId: string; motherDeviceId: string; subDeviceId: string },
+): void {
+  const openCount = (
+    tx
+      .select({ id: kitMembers.id })
+      .from(kitMembers)
+      .where(and(eq(kitMembers.motherDeviceId, params.motherDeviceId), isNull(kitMembers.removedAt)))
+      .all() as Array<{ id: string }>
+  ).length;
+  if (openCount >= 3) return;
+
+  const alreadyMember = tx
+    .select({ id: kitMembers.id })
+    .from(kitMembers)
+    .where(and(eq(kitMembers.subDeviceId, params.subDeviceId), isNull(kitMembers.removedAt)))
+    .get();
+  if (alreadyMember) return;
+
+  const now = nowSeconds();
+  const kitMemberId = createId();
+  tx.insert(kitMembers)
+    .values({
+      id: kitMemberId,
+      orgId: params.orgId,
+      motherDeviceId: params.motherDeviceId,
+      subDeviceId: params.subDeviceId,
+      addedAt: now,
+    })
+    .run();
+
+  writeAudit(tx, {
+    orgId: params.orgId,
+    actorUserId: params.actorUserId,
+    entityTable: 'kit_members',
+    entityId: kitMemberId,
+    operation: 'correct',
+    after: {
+      motherDeviceId: params.motherDeviceId,
+      subDeviceId: params.subDeviceId,
+      via: 'orphan_auto_attach_verified_pairing',
+    },
+  });
 }
 
 /**
@@ -535,6 +588,15 @@ function reconcileSubPairings(
         pairedBy: params.actorUserId,
       })
       .run();
+
+    if (device.origin === 'discovered') {
+      attachOrphanSubToOwnMotherRegistration(tx, {
+        orgId: params.orgId,
+        actorUserId: params.actorUserId,
+        motherDeviceId: params.motherDeviceId,
+        subDeviceId: device.id,
+      });
+    }
 
     const movementLogId = createId();
     tx.insert(movementLogs)
