@@ -87,6 +87,50 @@ type ScannedDevice = {
   deviceType: string;
 };
 
+/**
+ * Bare device row only — no kit_members, no registration_logs. Registration is inventory
+ * bookkeeping, not the atomic record; the install this serial was scanned into is. Getting it
+ * "on the system" here is sufficient for the install to proceed — reconciling which mother's
+ * registration it belongs to is a separate, looser concern (registration.service.ts's
+ * autoAssignOrphanSubs sweeps these up independently).
+ */
+function registerBareDiscoveredSub(
+  tx: DbClient,
+  params: { orgId: string; actorUserId: string; serial: string; motherSerial: string },
+): ScannedDevice {
+  const now = Math.floor(Date.now() / 1000);
+  const device: ScannedDevice = { id: createId(), orgId: params.orgId, serial: params.serial, deviceType: 'sub' };
+  tx.insert(devices)
+    .values({
+      id: device.id,
+      orgId: params.orgId,
+      deviceType: 'sub',
+      serial: params.serial,
+      lifecycleStatus: 'available',
+      registeredAt: now,
+      registeredBy: params.actorUserId,
+      origin: 'discovered',
+      notes: `Physically scanned during a kit-change install on ${params.motherSerial}; never previously registered.`,
+    })
+    .run();
+  writeAudit(tx, {
+    orgId: params.orgId,
+    actorUserId: params.actorUserId,
+    entityTable: 'devices',
+    entityId: device.id,
+    operation: 'create',
+    after: {
+      serial: params.serial,
+      deviceType: 'sub',
+      lifecycleStatus: 'available',
+      origin: 'discovered',
+      via: 'kit_change_install_unregistered_sub',
+      motherSerial: params.motherSerial,
+    },
+  });
+  return device;
+}
+
 function resolveIncompleteRegisteredKit(
   tx: DbClient,
   params: {
@@ -129,8 +173,21 @@ function resolveIncompleteRegisteredKit(
   // historical kit movement can legitimately make physical slot membership differ from birth
   // registration membership. Strict membership matching applies only while completing an
   // incomplete registration.
-  if (unknownSerials.length === 0 && memberships.length >= 3) {
-    return { subs: knownSubs, addedSubSerials: [] };
+  if (memberships.length >= 3) {
+    // Registration is bookkeeping ("this device exists"), not the atomic record of truth —
+    // installs are. A sub-lock physically on a truck that was simply never entered into the
+    // system (human error at an earlier registration/import, not a real absence) still gets
+    // scanned here as "unknown." Bare-register it — exactly like verification.service.ts already
+    // does for scan-discovered devices — and let the install proceed with reality; it does NOT
+    // need to reconcile against this mother's own registered kit_members, which is a separate,
+    // much looser piece of bookkeeping that the orphan sweep (registration.service.ts's
+    // autoAssignOrphanSubs) reconciles independently and asynchronously.
+    const registeredNow = unknownSerials.map((serial) => registerBareDiscoveredSub(tx, { orgId: params.orgId, actorUserId: params.actorUserId, serial, motherSerial: params.mother.serial }));
+    const bareBySerial = new Map(registeredNow.map((device) => [device.serial, device]));
+    return {
+      subs: params.subSerials.map((serial) => params.bySerial.get(serial) ?? bareBySerial.get(serial)!),
+      addedSubSerials: unknownSerials,
+    };
   }
 
   const registration = tx

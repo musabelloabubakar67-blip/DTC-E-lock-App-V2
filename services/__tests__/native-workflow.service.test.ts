@@ -136,6 +136,53 @@ describe('native installation workflow', () => {
     expect(db.select().from(conflictReviews).all()).toHaveLength(0);
   });
 
+  it('kit-change install with a never-registered sub-lock: bare-registers it and installs, without requiring the mother\'s already-complete registered kit to reconcile', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const kit = registerTestKit(db, orgId, installerId, 'FULL');
+    const motherSerial = serialOf(db, kit.motherDeviceId);
+    const subB = serialOf(db, kit.subDeviceIds[0]);
+    const subC = serialOf(db, kit.subDeviceIds[1]);
+
+    const result = recordNativeInstallation(db, {
+      orgId,
+      actorUserId: installerId,
+      payload: {
+        truckPlate: 'FZE 900 SW',
+        motherSerial,
+        subSerials: [subB, subC, 'NEVERSEEN0001'],
+        company: 'mrs',
+        installMode: 'changed',
+        checklist: { overallStatus: 'successful' },
+      },
+    });
+
+    expect(result.completedRegistrationSubSerials).toEqual(['NEVERSEEN0001']);
+    const newDevice = db.select().from(devices).where(eq(devices.serial, 'NEVERSEEN0001')).get()!;
+    expect(newDevice).toMatchObject({ deviceType: 'sub', origin: 'discovered', lifecycleStatus: 'in_service' });
+
+    // The mother's OWN registered kit_members is untouched — still the original 3 subs, unaware
+    // of the swap. Registration bookkeeping and physical install are deliberately decoupled.
+    const openMembers = db
+      .select({ subDeviceId: kitMembers.subDeviceId })
+      .from(kitMembers)
+      .where(and(eq(kitMembers.motherDeviceId, kit.motherDeviceId), isNull(kitMembers.removedAt)))
+      .all()
+      .map((row) => row.subDeviceId);
+    expect(openMembers.sort()).toEqual([...kit.subDeviceIds].sort());
+
+    // But the truck's actual slot_pairings reflect physical reality: the new device is in service.
+    const truck = db.select().from(trucks).where(eq(trucks.plate, 'FZE 900 SW')).get()!;
+    const pairedSubIds = db
+      .select({ subDeviceId: slotPairings.subDeviceId })
+      .from(slotPairings)
+      .where(and(eq(slotPairings.motherDeviceId, kit.motherDeviceId), isNull(slotPairings.unpairedAt)))
+      .all()
+      .map((row) => row.subDeviceId);
+    expect(pairedSubIds).toContain(newDevice.id);
+    expect(db.select().from(truckAssignments).where(eq(truckAssignments.truckId, truck.id)).all()).toHaveLength(1);
+  });
+
   it('rejects a registered sub-lock from another kit without writing a partial install', () => {
     const { db } = createTestDb();
     const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
