@@ -3,7 +3,7 @@ import { eq, isNull, and } from 'drizzle-orm';
 import { kitMembers, devices, registrationLogs, slotPairings } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures } from '../../tests/helpers/fixtures';
-import { listRegistrationsPage, registerIncompleteKit, registerKit, autoAssignOrphanSubs } from '../registration.service';
+import { listRegistrationsPage, registerIncompleteKit, registerKit, autoAssignOrphanSubs, backfillRegistrationForExistingDevice } from '../registration.service';
 import { AuthzError, BusinessError } from '../../lib/errors';
 import { createDevice } from '../../tests/helpers/fixtures';
 
@@ -219,6 +219,87 @@ describe('registration.service', () => {
     // Sanity: autoAssignOrphanSubs directly also declines to touch it.
     const { assignedCount } = autoAssignOrphanSubs(db, orgId, supervisorId);
     expect(assignedCount).toBe(0);
+  });
+
+  it('backfillRegistrationForExistingDevice: writes a registration for a bare-import mother, using already-registered subs', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    const motherId = createDevice(db, orgId, { type: 'mother', serial: '555555555555' });
+    const sub1 = createDevice(db, orgId, { type: 'sub', serial: 'BACKFILLSUB1' });
+    const sub2 = createDevice(db, orgId, { type: 'sub', serial: 'BACKFILLSUB2' });
+
+    const result = backfillRegistrationForExistingDevice(db, {
+      actor,
+      motherSerial: '555555555555',
+      subSerials: ['BACKFILLSUB1', 'BACKFILLSUB2'],
+    });
+
+    expect(result.motherDeviceId).toBe(motherId);
+    expect(result.subDeviceIds.sort()).toEqual([sub1, sub2].sort());
+    expect(result.reclaimedFromMotherIds).toEqual([]);
+    const reg = db.select().from(registrationLogs).where(eq(registrationLogs.id, result.registrationLogId)).get()!;
+    expect(reg.motherDeviceId).toBe(motherId);
+  });
+
+  it('backfillRegistrationForExistingDevice: reclaims a sub currently linked to a different mother, with an audit trail', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    const wrongMotherId = createDevice(db, orgId, { type: 'mother', serial: '666666666666' });
+    const rightMotherId = createDevice(db, orgId, { type: 'mother', serial: '777777777777' });
+    const subId = createDevice(db, orgId, { type: 'sub', serial: 'RECLAIMSUB01' });
+    db.insert(kitMembers)
+      .values({ id: 'km-wrong', orgId, motherDeviceId: wrongMotherId, subDeviceId: subId, addedAt: 1_700_000_000 })
+      .run();
+
+    const result = backfillRegistrationForExistingDevice(db, {
+      actor,
+      motherSerial: '777777777777',
+      subSerials: ['RECLAIMSUB01'],
+    });
+
+    expect(result.reclaimedFromMotherIds).toEqual([wrongMotherId]);
+    const oldMembership = db.select().from(kitMembers).where(eq(kitMembers.id, 'km-wrong')).get()!;
+    expect(oldMembership.removedAt).not.toBeNull();
+    const newMembership = db
+      .select()
+      .from(kitMembers)
+      .where(and(eq(kitMembers.subDeviceId, subId), isNull(kitMembers.removedAt)))
+      .get()!;
+    expect(newMembership.motherDeviceId).toBe(rightMotherId);
+    void wrongMotherId;
+  });
+
+  it('backfillRegistrationForExistingDevice: rejects a mother that already has a registration', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    registerKit(db, {
+      orgId,
+      actorUserId: supervisorId,
+      motherSerial: '888888888888',
+      subSerials: ['AAAAAAAAAAAA', 'BBBBBBBBBBBB', 'CCCCCCCCCCCC'],
+      simNumber: '2348012345678',
+    });
+
+    expect(() =>
+      backfillRegistrationForExistingDevice(db, { actor, motherSerial: '888888888888', subSerials: [] }),
+    ).toThrow(/already has a registration record/);
+  });
+
+  it('backfillRegistrationForExistingDevice: rejects a sub serial that is not a registered device', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+    createDevice(db, orgId, { type: 'mother', serial: '999999999999' });
+
+    expect(() =>
+      backfillRegistrationForExistingDevice(db, { actor, motherSerial: '999999999999', subSerials: ['NOSUCHDEVICE'] }),
+    ).toThrow(/not a registered device/);
   });
 
   it('rejects incomplete registration imports from installers', () => {

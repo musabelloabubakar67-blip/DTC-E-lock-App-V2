@@ -283,6 +283,136 @@ export function registerIncompleteKit(db: DbClient, input: RegisterIncompleteKit
   return result;
 }
 
+export type BackfillRegistrationInput = {
+  actor: AuthenticatedUser;
+  motherSerial: string;
+  subSerials: string[]; // must already be registered devices — this is not an import path
+  simNumber?: string;
+  notes?: string;
+  loggedDate?: number;
+};
+
+export type BackfillRegistrationResult = RegisterKitResult & { reclaimedFromMotherIds: string[] };
+
+/**
+ * Supervisor-only: writes a registration_logs (+ kit_members) record for a mother that already
+ * has a devices row but was never actually registered through the app — a bare import artifact,
+ * not a normal incomplete registration. Distinct from registerIncompleteKit, which always
+ * creates a brand-new devices row and rejects an existing serial outright.
+ *
+ * Each sub serial must already be a registered device (this backfills a real, evidence-backed
+ * kit — e.g. from slot_pairings history — not fresh unverified serials). If a sub is currently
+ * linked to a DIFFERENT mother's open kit_members (e.g. mis-assigned by autoAssignOrphanSubs'
+ * FIFO before this evidence was known), that link is closed with an audit trail before
+ * reclaiming it here — never silently overwritten.
+ */
+export function backfillRegistrationForExistingDevice(
+  db: DbClient,
+  input: BackfillRegistrationInput,
+): BackfillRegistrationResult {
+  requireSupervisor(input.actor);
+
+  const motherSerial = normalizeSerial(input.motherSerial);
+  const subSerials = [...new Set(input.subSerials.map(normalizeSerial).filter(Boolean))];
+  if (subSerials.length > 3) throw new BusinessError('A kit has at most 3 sub-locks');
+  if (subSerials.includes(motherSerial)) throw new BusinessError('Mother and sub serials must be distinct');
+
+  const motherDevice = db.select().from(devices).where(and(eq(devices.orgId, input.actor.orgId), eq(devices.serial, motherSerial))).get() as
+    | { id: string }
+    | undefined;
+  if (!motherDevice) throw new BusinessError(`Mother ${motherSerial} is not a registered device — use the incomplete registration import instead`);
+
+  const existingReg = db.select({ id: registrationLogs.id }).from(registrationLogs).where(eq(registrationLogs.motherDeviceId, motherDevice.id)).get();
+  if (existingReg) throw new BusinessError(`Mother ${motherSerial} already has a registration record`);
+
+  const subDevices = subSerials.map((serial) => {
+    const device = db.select().from(devices).where(and(eq(devices.orgId, input.actor.orgId), eq(devices.serial, serial))).get() as
+      | { id: string; serial: string }
+      | undefined;
+    if (!device) throw new BusinessError(`Sub-lock ${serial} is not a registered device`);
+    return device;
+  });
+
+  const now = Math.floor(Date.now() / 1000);
+  const loggedDate = input.loggedDate ?? now;
+  const completenessNote = `Registration backfill for a pre-existing device: ${subDevices.length} of 3 sub-locks supplied.`;
+  const notes = input.notes ? `${completenessNote} ${input.notes}` : completenessNote;
+
+  return db.transaction((tx: DbClient) => {
+    const reclaimedFromMotherIds: string[] = [];
+
+    for (const subDevice of subDevices) {
+      const openElsewhere = tx
+        .select()
+        .from(kitMembers)
+        .where(and(eq(kitMembers.subDeviceId, subDevice.id), isNull(kitMembers.removedAt)))
+        .get() as { id: string; motherDeviceId: string } | undefined;
+      if (openElsewhere && openElsewhere.motherDeviceId !== motherDevice.id) {
+        tx.update(kitMembers).set({ removedAt: now }).where(eq(kitMembers.id, openElsewhere.id)).run();
+        tx.insert(auditLog)
+          .values({
+            id: createId(),
+            orgId: input.actor.orgId,
+            actorUserId: input.actor.id,
+            entityTable: 'kit_members',
+            entityId: openElsewhere.id,
+            operation: 'correct',
+            beforeJson: JSON.stringify({ motherDeviceId: openElsewhere.motherDeviceId, subDeviceId: subDevice.id }),
+            afterJson: JSON.stringify({ removed: true, reason: 'reclaimed_for_verified_registration_backfill', reclaimedByMotherSerial: motherSerial }),
+          })
+          .run();
+        reclaimedFromMotherIds.push(openElsewhere.motherDeviceId);
+      }
+      if (!openElsewhere || openElsewhere.motherDeviceId !== motherDevice.id) {
+        tx.insert(kitMembers)
+          .values({ id: createId(), orgId: input.actor.orgId, motherDeviceId: motherDevice.id, subDeviceId: subDevice.id, addedAt: loggedDate })
+          .run();
+      }
+    }
+
+    const registrationLogId = createId();
+    tx.insert(registrationLogs)
+      .values({
+        id: registrationLogId,
+        orgId: input.actor.orgId,
+        motherDeviceId: motherDevice.id,
+        actorUserId: input.actor.id,
+        loggedDate,
+        simNumber: input.simNumber ?? null,
+        source: 'import',
+        notes,
+      })
+      .run();
+
+    tx.insert(auditLog)
+      .values({
+        id: createId(),
+        orgId: input.actor.orgId,
+        actorUserId: input.actor.id,
+        entityTable: 'registration_logs',
+        entityId: registrationLogId,
+        operation: 'import',
+        afterJson: JSON.stringify({
+          motherDeviceId: motherDevice.id,
+          subDeviceIds: subDevices.map((d) => d.id),
+          motherSerial,
+          subSerials,
+          backfill: true,
+          reclaimedFromMotherIds,
+          notes,
+        }),
+      })
+      .run();
+
+    return {
+      motherDeviceId: motherDevice.id,
+      subDeviceIds: subDevices.map((d) => d.id),
+      registrationLogId,
+      reclaimedFromMotherIds,
+    };
+  });
+}
+
 /**
  * Registration is bookkeeping (accounting for devices exist), not the trust-critical layer —
  * install/verification is. So unlike the verified slot_pairings match in
