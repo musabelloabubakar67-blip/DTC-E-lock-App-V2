@@ -240,6 +240,27 @@ class DtcApi(private val context: Context) {
         )
     }
 
+    suspend fun registerIncompleteKit(mother: String, subs: List<String>, sim: String?, notes: String?) = withContext(Dispatchers.IO) {
+        post(
+            "/api/registrations/incomplete",
+            JSONObject().put("motherSerial", mother).put("subSerials", JSONArray(subs))
+                .putOptional("simNumber", sim).putOptional("notes", notes),
+        )
+    }
+
+    suspend fun runOrphanSweep(): Int = withContext(Dispatchers.IO) {
+        post("/api/registrations/orphan-sweep", JSONObject()).optJSONObject("data")?.optInt("assignedCount") ?: 0
+    }
+
+    suspend fun backfillRegistration(mother: String, subs: List<String>, sim: String?, notes: String?): Int = withContext(Dispatchers.IO) {
+        val result = post(
+            "/api/registrations/backfill",
+            JSONObject().put("motherSerial", mother).put("subSerials", JSONArray(subs))
+                .putOptional("simNumber", sim).putOptional("notes", notes),
+        )
+        result.optJSONObject("data")?.optJSONArray("reclaimedFromMotherIds")?.length() ?: 0
+    }
+
     suspend fun setRegistryOwnership(registrationIds: List<String>, status: String, notes: String) = withContext(Dispatchers.IO) {
         post(
             "/api/registry/ownership",

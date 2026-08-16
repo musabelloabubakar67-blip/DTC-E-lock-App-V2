@@ -878,6 +878,17 @@
   align-items: start;
   border-top: 2px solid var(--industrial-rule);
 }
+.app-shell .settings-group-heading {
+  margin: 0 0 6px;
+  padding: 0;
+  color: var(--industrial-muted);
+  font: 800 var(--industrial-type-meta)/1.2 var(--industrial-data);
+  text-transform: uppercase;
+  letter-spacing: .04em;
+}
+.app-shell .settings-group-heading::before { content: "[ "; }
+.app-shell .settings-group-heading::after { content: " ]"; }
+.app-shell .settings-layout__data .settings-group-heading:not(:first-child) { margin-top: 18px; }
 .app-shell .settings-layout__team { grid-area: team; min-width: 0; }
 .app-shell .settings-layout__profile { grid-area: profile; min-width: 0; }
 .app-shell .settings-layout__appearance { grid-area: appearance; min-width: 0; }

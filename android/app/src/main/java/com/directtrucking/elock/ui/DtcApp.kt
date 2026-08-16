@@ -34,7 +34,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
@@ -588,6 +587,23 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         _state.update { it.copy(message = "$filename saved to Downloads / DTC E-Lock") }
     }
 
+    fun registerIncompleteKit(mother: String, subs: List<String>, sim: String?, notes: String?, done: () -> Unit) = launchWork {
+        api.registerIncompleteKit(mother, subs, sim, notes)
+        _state.update { it.copy(message = "Incomplete registration saved and audited") }
+        done()
+    }
+
+    fun runOrphanSweep() = launchWork {
+        val assigned = api.runOrphanSweep()
+        _state.update { it.copy(message = "Assigned $assigned orphan sub-lock${if (assigned == 1) "" else "s"} to incomplete registrations") }
+    }
+
+    fun backfillRegistration(mother: String, subs: List<String>, sim: String?, notes: String?, done: () -> Unit) = launchWork {
+        val reclaimed = api.backfillRegistration(mother, subs, sim, notes)
+        _state.update { it.copy(message = if (reclaimed > 0) "Registration backfilled. Reclaimed $reclaimed sub-lock(s)" else "Registration backfilled") }
+        done()
+    }
+
     fun review(id: String, action: String, notes: String) = launchWork {
         if (demo) {
             _state.update { current -> current.copy(reviews = current.reviews.filterNot { it.id == id }, message = "Demo review updated") }
@@ -684,7 +700,7 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
     var username by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
-    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().imePadding().padding(20.dp)) {
+    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().padding(20.dp)) {
         val wide = maxWidth >= 700.dp
         val loginWidth = if (wide) 430.dp else maxWidth
         Box(Modifier.align(Alignment.TopStart).width(6.dp).fillMaxHeight().background(DtcRed))
@@ -1049,7 +1065,7 @@ private fun ScreenContent(state: NativeUiState, model: DtcViewModel, modifier: M
         PullToRefreshBox(
             isRefreshing = state.working,
             onRefresh = model::refreshCurrent,
-            modifier = Modifier.fillMaxSize().weight(1f).imePadding(),
+            modifier = Modifier.fillMaxSize().weight(1f),
         ) {
             Crossfade(
                 targetState = state.selected,
@@ -1179,8 +1195,11 @@ private fun PageHeader(kicker: String, title: String, accent: String, metric: St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun DashboardScreen(data: DashboardSnapshot, open: (AppScreen) -> Unit) {
+    val utilization = if (data.counts.registeredKits > 0) {
+        Math.round(data.counts.inServiceMothers * 100.0 / data.counts.registeredKits).toInt()
+    } else 0
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
-        item { PageHeader("Fleet operational register", "Fleet", number(data.counts.inServiceMothers), "32%", "${number(data.counts.availableMothers)} mother locks remain available for assignment.") }
+        item { PageHeader("Fleet operational register", "Fleet", number(data.counts.inServiceMothers), "$utilization%", "${number(data.counts.availableMothers)} mother locks remain available for assignment.") }
         item {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val metrics = listOf(
@@ -2676,6 +2695,7 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                     }
                 }
             }
+            item { RegistryToolsPanel(state, model) }
             item {
                 Panel("Data exports / ${settings?.exports?.size ?: 0}") {
                     Text("Exports use the same organisation-scoped datasets and supervisor checks as the web app.", color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -2689,6 +2709,87 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun RegistryToolsPanel(state: NativeUiState, model: DtcViewModel) {
+    var incompleteMother by remember { mutableStateOf("") }
+    var incompleteSim by remember { mutableStateOf("") }
+    var incompleteSubB by remember { mutableStateOf("") }
+    var incompleteSubC by remember { mutableStateOf("") }
+    var incompleteSubD by remember { mutableStateOf("") }
+    var incompleteNotes by remember { mutableStateOf("") }
+
+    var backfillMother by remember { mutableStateOf("") }
+    var backfillSubB by remember { mutableStateOf("") }
+    var backfillSubC by remember { mutableStateOf("") }
+    var backfillSubD by remember { mutableStateOf("") }
+    var backfillNotes by remember { mutableStateOf("") }
+
+    Panel("Registry tools") {
+        Text(
+            "Supervisor import for legitimate records with zero, one, or two known sub-locks.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(incompleteMother, { incompleteMother = it }, Modifier.fillMaxWidth(), label = { Text("Mother serial") }, singleLine = true)
+        OutlinedTextField(incompleteSim, { incompleteSim = it }, Modifier.fillMaxWidth(), label = { Text("SIM number (optional)") }, singleLine = true)
+        OutlinedTextField(incompleteSubB, { incompleteSubB = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock B (optional)") }, singleLine = true)
+        OutlinedTextField(incompleteSubC, { incompleteSubC = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock C (optional)") }, singleLine = true)
+        OutlinedTextField(incompleteSubD, { incompleteSubD = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock D (optional)") }, singleLine = true)
+        OutlinedTextField(incompleteNotes, { incompleteNotes = it }, Modifier.fillMaxWidth(), label = { Text("Import note") }, singleLine = true)
+        Button(
+            onClick = {
+                model.registerIncompleteKit(
+                    incompleteMother,
+                    listOf(incompleteSubB, incompleteSubC, incompleteSubD).filter { it.isNotBlank() },
+                    incompleteSim.ifBlank { null },
+                    incompleteNotes.ifBlank { null },
+                ) {
+                    incompleteMother = ""; incompleteSim = ""; incompleteSubB = ""; incompleteSubC = ""; incompleteSubD = ""; incompleteNotes = ""
+                }
+            },
+            enabled = !state.working && incompleteMother.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
+        ) { Text("SAVE INCOMPLETE REGISTRATION") }
+
+        Divider()
+
+        Text(
+            "Fill empty slots on incomplete registrations from sub-locks sitting unlinked in inventory (oldest-incomplete-registration first, oldest-orphan first).",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedButton(
+            onClick = { model.runOrphanSweep() },
+            enabled = !state.working,
+            modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(7.dp),
+        ) { Text("RUN ORPHAN SUB-LOCK SWEEP") }
+
+        Divider()
+
+        Text(
+            "Write a registration onto a mother that already exists as a device but was never actually registered. Each sub-lock must already be a registered device.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        OutlinedTextField(backfillMother, { backfillMother = it }, Modifier.fillMaxWidth(), label = { Text("Mother serial") }, singleLine = true)
+        OutlinedTextField(backfillSubB, { backfillSubB = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock B (optional)") }, singleLine = true)
+        OutlinedTextField(backfillSubC, { backfillSubC = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock C (optional)") }, singleLine = true)
+        OutlinedTextField(backfillSubD, { backfillSubD = it.uppercase() }, Modifier.fillMaxWidth(), label = { Text("Sub-lock D (optional)") }, singleLine = true)
+        OutlinedTextField(backfillNotes, { backfillNotes = it }, Modifier.fillMaxWidth(), label = { Text("Notes / evidence") }, singleLine = true)
+        Button(
+            onClick = {
+                model.backfillRegistration(
+                    backfillMother,
+                    listOf(backfillSubB, backfillSubC, backfillSubD).filter { it.isNotBlank() },
+                    null,
+                    backfillNotes.ifBlank { null },
+                ) {
+                    backfillMother = ""; backfillSubB = ""; backfillSubC = ""; backfillSubD = ""; backfillNotes = ""
+                }
+            },
+            enabled = !state.working && backfillMother.isNotBlank(),
+            modifier = Modifier.fillMaxWidth().height(50.dp), shape = RoundedCornerShape(7.dp),
+        ) { Text("BACKFILL REGISTRATION") }
     }
 }
 

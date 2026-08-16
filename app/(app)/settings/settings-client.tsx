@@ -65,6 +65,7 @@ export default function SettingsClient({
       <section className="settings-layout">
         {canManageUsers && (
           <div className="settings-layout__team">
+            <h2 className="settings-group-heading">Team</h2>
             <Panel
               title="Team access"
               action={
@@ -215,6 +216,7 @@ export default function SettingsClient({
           </div>
         )}
         <div className="settings-layout__profile">
+          <h2 className="settings-group-heading">Account</h2>
           <Panel title="Profile" action={<LogOut className="settings-panel-icon" aria-hidden="true" />}>
             <div className="settings-profile">
               <div className="settings-profile__identity">
@@ -285,8 +287,11 @@ export default function SettingsClient({
 
         {canManageUsers && (
           <div className="settings-layout__data" id="exports">
+            <h2 className="settings-group-heading">Registry tools</h2>
             <IncompleteRegistrationPanel />
+            <BackfillRegistrationPanel />
             <InstallationVerificationBackfillPanel />
+            <h2 className="settings-group-heading">Data exports</h2>
             <Panel title="Exports" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
               <p className="settings-panel-copy">Export operational records in CSV or JSON.</p>
               <div className="export-list" role="list">
@@ -490,6 +495,85 @@ function IncompleteRegistrationPanel() {
           {sweeping ? 'Sweeping...' : 'Run orphan sub-lock sweep'}
         </button>
       </div>
+    </Panel>
+  );
+}
+
+function BackfillRegistrationPanel() {
+  const [status, setStatus] = useState<{ tone: 'success' | 'error'; message: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const data = new FormData(form);
+    const subSerials = ['subSerialB', 'subSerialC', 'subSerialD']
+      .map((name) => String(data.get(name) ?? '').trim())
+      .filter(Boolean);
+    setSaving(true);
+    setStatus(null);
+    try {
+      const response = await fetch('/api/registrations/backfill', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          motherSerial: String(data.get('motherSerial') ?? ''),
+          simNumber: String(data.get('simNumber') ?? ''),
+          subSerials,
+          notes: String(data.get('notes') ?? ''),
+        }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) throw new Error(payload?.error?.message ?? 'Backfill failed');
+      const reclaimed = (payload?.data?.reclaimedFromMotherIds ?? []) as string[];
+      form.reset();
+      setStatus({
+        tone: 'success',
+        message: reclaimed.length
+          ? `Registration backfilled. Reclaimed ${reclaimed.length} sub-lock(s) from another mother's kit_members.`
+          : 'Registration backfilled.',
+      });
+    } catch (error) {
+      setStatus({ tone: 'error', message: error instanceof Error ? error.message : 'Backfill failed' });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel title="Backfill existing device" action={<PackagePlus className="settings-panel-icon" aria-hidden="true" />}>
+      <p className="settings-panel-copy">
+        Write a registration record onto a mother that already exists as a device (a bare import artifact) but was never actually registered.
+        Each sub-lock must already be a registered device — this backfills an evidence-backed kit, not fresh serials.
+      </p>
+      <form className="settings-form" onSubmit={submit}>
+        <label>
+          <span>Mother serial</span>
+          <input name="motherSerial" inputMode="numeric" required />
+        </label>
+        <label>
+          <span>SIM number (optional)</span>
+          <input name="simNumber" inputMode="numeric" />
+        </label>
+        {(['B', 'C', 'D'] as const).map((slot) => (
+          <label key={slot}>
+            <span>Sub-lock {slot} (optional)</span>
+            <input name={`subSerial${slot}`} autoCapitalize="characters" />
+          </label>
+        ))}
+        <label>
+          <span>Notes</span>
+          <input name="notes" placeholder="Evidence for this kit (e.g. slot_pairings history)" />
+        </label>
+        {status && (
+          <p className={`banner ${status.tone === 'error' ? 'banner--error' : 'banner--success'}`}>
+            {status.message}
+          </p>
+        )}
+        <button className="btn btn--primary" type="submit" disabled={saving}>
+          {saving ? 'Saving...' : 'Backfill registration'}
+        </button>
+      </form>
     </Panel>
   );
 }
