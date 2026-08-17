@@ -295,16 +295,18 @@ export type BackfillRegistrationInput = {
 export type BackfillRegistrationResult = RegisterKitResult & { reclaimedFromMotherIds: string[] };
 
 /**
- * Supervisor-only: writes a registration_logs (+ kit_members) record for a mother that already
- * has a devices row but was never actually registered through the app — a bare import artifact,
- * not a normal incomplete registration. Distinct from registerIncompleteKit, which always
+ * Supervisor-only: writes/tops up a registration record for a mother that already has a devices
+ * row, using already-registered sub-locks as evidence (e.g. slot_pairings history, or a fresh
+ * install scan naming a sub that's wrongly claimed elsewhere). Covers two cases: a bare import
+ * artifact with no registration_logs at all yet, and a mother already registered incomplete
+ * (including mother-only) that needs specific known subs added — never a brand-new serial, and
+ * never more than 3 members total once added. Distinct from registerIncompleteKit, which always
  * creates a brand-new devices row and rejects an existing serial outright.
  *
- * Each sub serial must already be a registered device (this backfills a real, evidence-backed
- * kit — e.g. from slot_pairings history — not fresh unverified serials). If a sub is currently
- * linked to a DIFFERENT mother's open kit_members (e.g. mis-assigned by autoAssignOrphanSubs'
- * FIFO before this evidence was known), that link is closed with an audit trail before
- * reclaiming it here — never silently overwritten.
+ * Each sub serial must already be a registered device. If a sub is currently linked to a
+ * DIFFERENT mother's open kit_members (e.g. mis-assigned by autoAssignOrphanSubs' FIFO before
+ * this evidence was known), that link is closed with an audit trail before reclaiming it here —
+ * never silently overwritten.
  */
 export function backfillRegistrationForExistingDevice(
   db: DbClient,
@@ -314,7 +316,6 @@ export function backfillRegistrationForExistingDevice(
 
   const motherSerial = normalizeSerial(input.motherSerial);
   const subSerials = [...new Set(input.subSerials.map(normalizeSerial).filter(Boolean))];
-  if (subSerials.length > 3) throw new BusinessError('A kit has at most 3 sub-locks');
   if (subSerials.includes(motherSerial)) throw new BusinessError('Mother and sub serials must be distinct');
 
   const motherDevice = db.select().from(devices).where(and(eq(devices.orgId, input.actor.orgId), eq(devices.serial, motherSerial))).get() as
@@ -322,8 +323,20 @@ export function backfillRegistrationForExistingDevice(
     | undefined;
   if (!motherDevice) throw new BusinessError(`Mother ${motherSerial} is not a registered device — use the incomplete registration import instead`);
 
-  const existingReg = db.select({ id: registrationLogs.id }).from(registrationLogs).where(eq(registrationLogs.motherDeviceId, motherDevice.id)).get();
-  if (existingReg) throw new BusinessError(`Mother ${motherSerial} already has a registration record`);
+  const existingReg = db.select({ id: registrationLogs.id }).from(registrationLogs).where(eq(registrationLogs.motherDeviceId, motherDevice.id)).get() as
+    | { id: string }
+    | undefined;
+
+  const existingOpenMemberCount = (
+    db
+      .select({ id: kitMembers.id })
+      .from(kitMembers)
+      .where(and(eq(kitMembers.motherDeviceId, motherDevice.id), isNull(kitMembers.removedAt)))
+      .all() as Array<{ id: string }>
+  ).length;
+  if (existingOpenMemberCount + subSerials.length > 3) {
+    throw new BusinessError(`Mother ${motherSerial} already has ${existingOpenMemberCount} sub-lock(s); at most 3 total`);
+  }
 
   const subDevices = subSerials.map((serial) => {
     const device = db.select().from(devices).where(and(eq(devices.orgId, input.actor.orgId), eq(devices.serial, serial))).get() as
@@ -370,39 +383,61 @@ export function backfillRegistrationForExistingDevice(
       }
     }
 
-    const registrationLogId = createId();
-    tx.insert(registrationLogs)
-      .values({
-        id: registrationLogId,
-        orgId: input.actor.orgId,
-        motherDeviceId: motherDevice.id,
-        actorUserId: input.actor.id,
-        loggedDate,
-        simNumber: input.simNumber ?? null,
-        source: 'import',
-        notes,
-      })
-      .run();
-
-    tx.insert(auditLog)
-      .values({
-        id: createId(),
-        orgId: input.actor.orgId,
-        actorUserId: input.actor.id,
-        entityTable: 'registration_logs',
-        entityId: registrationLogId,
-        operation: 'import',
-        afterJson: JSON.stringify({
+    const registrationLogId = existingReg?.id ?? createId();
+    if (existingReg) {
+      tx.insert(auditLog)
+        .values({
+          id: createId(),
+          orgId: input.actor.orgId,
+          actorUserId: input.actor.id,
+          entityTable: 'registration_logs',
+          entityId: registrationLogId,
+          operation: 'correct',
+          afterJson: JSON.stringify({
+            motherDeviceId: motherDevice.id,
+            addedSubDeviceIds: subDevices.map((d) => d.id),
+            motherSerial,
+            addedSubSerials: subSerials,
+            backfill: true,
+            reclaimedFromMotherIds,
+            notes,
+          }),
+        })
+        .run();
+    } else {
+      tx.insert(registrationLogs)
+        .values({
+          id: registrationLogId,
+          orgId: input.actor.orgId,
           motherDeviceId: motherDevice.id,
-          subDeviceIds: subDevices.map((d) => d.id),
-          motherSerial,
-          subSerials,
-          backfill: true,
-          reclaimedFromMotherIds,
+          actorUserId: input.actor.id,
+          loggedDate,
+          simNumber: input.simNumber ?? null,
+          source: 'import',
           notes,
-        }),
-      })
-      .run();
+        })
+        .run();
+
+      tx.insert(auditLog)
+        .values({
+          id: createId(),
+          orgId: input.actor.orgId,
+          actorUserId: input.actor.id,
+          entityTable: 'registration_logs',
+          entityId: registrationLogId,
+          operation: 'import',
+          afterJson: JSON.stringify({
+            motherDeviceId: motherDevice.id,
+            subDeviceIds: subDevices.map((d) => d.id),
+            motherSerial,
+            subSerials,
+            backfill: true,
+            reclaimedFromMotherIds,
+            notes,
+          }),
+        })
+        .run();
+    }
 
     return {
       motherDeviceId: motherDevice.id,

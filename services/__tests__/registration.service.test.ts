@@ -273,7 +273,7 @@ describe('registration.service', () => {
     void wrongMotherId;
   });
 
-  it('backfillRegistrationForExistingDevice: rejects a mother that already has a registration', () => {
+  it('backfillRegistrationForExistingDevice: rejects adding subs beyond 3 total for an already-full kit', () => {
     const { db } = createTestDb();
     const { orgId, supervisorId } = seedBaseFixtures(db);
     const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
@@ -285,10 +285,39 @@ describe('registration.service', () => {
       subSerials: ['AAAAAAAAAAAA', 'BBBBBBBBBBBB', 'CCCCCCCCCCCC'],
       simNumber: '2348012345678',
     });
+    createDevice(db, orgId, { type: 'sub', serial: 'DDDDDDDDDDDD' });
 
     expect(() =>
-      backfillRegistrationForExistingDevice(db, { actor, motherSerial: '888888888888', subSerials: [] }),
-    ).toThrow(/already has a registration record/);
+      backfillRegistrationForExistingDevice(db, { actor, motherSerial: '888888888888', subSerials: ['DDDDDDDDDDDD'] }),
+    ).toThrow(/at most 3 total/);
+  });
+
+  it('backfillRegistrationForExistingDevice: tops up an already-registered mother-only kit, reclaiming a wrongly-assigned sub', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+
+    const motherOnly = registerIncompleteKit(db, { actor, motherSerial: '777777777770', subSerials: [] });
+    const wrongMotherId = createDevice(db, orgId, { type: 'mother', serial: '999999999990' });
+    const subId = createDevice(db, orgId, { type: 'sub', serial: 'TOPUPSUB0001' });
+    db.insert(kitMembers)
+      .values({ id: 'km-topup-wrong', orgId, motherDeviceId: wrongMotherId, subDeviceId: subId, addedAt: 1_700_000_000 })
+      .run();
+
+    const result = backfillRegistrationForExistingDevice(db, {
+      actor,
+      motherSerial: '777777777770',
+      subSerials: ['TOPUPSUB0001'],
+    });
+
+    expect(result.registrationLogId).toBe(motherOnly.registrationLogId);
+    expect(result.reclaimedFromMotherIds).toEqual([wrongMotherId]);
+    const newMembership = db
+      .select()
+      .from(kitMembers)
+      .where(and(eq(kitMembers.subDeviceId, subId), isNull(kitMembers.removedAt)))
+      .get()!;
+    expect(newMembership.motherDeviceId).toBe(motherOnly.motherDeviceId);
   });
 
   it('backfillRegistrationForExistingDevice: rejects a sub serial that is not a registered device', () => {
