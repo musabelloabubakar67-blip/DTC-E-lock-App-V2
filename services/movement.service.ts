@@ -755,7 +755,15 @@ function normalizeReference(value: string): string {
   return value.trim().toUpperCase();
 }
 
-function resolveTruckId(db: DbClient, orgId: string, plateOrId: string): string {
+/**
+ * createIfMissing mirrors native-workflow.service.ts's createInstallTruck: a truck plate that
+ * has never been referenced before is a normal fact of fleet life (a new truck came into
+ * service), not an error — the same as install already treats it. Only used for the two action
+ * kinds where the destination truck is plausibly brand-new (new_assignment, truck_swap's
+ * toTruckId); sub/mother replacement's truckId still refers to an existing kit being modified,
+ * so an unknown plate there stays a hard error.
+ */
+function resolveTruckId(db: DbClient, orgId: string, plateOrId: string, createIfMissing = false): string {
   const reference = plateOrId.trim();
   const byId = db.select({ id: trucks.id }).from(trucks).where(and(eq(trucks.orgId, orgId), eq(trucks.id, reference))).get() as
     | { id: string }
@@ -767,8 +775,15 @@ function resolveTruckId(db: DbClient, orgId: string, plateOrId: string): string 
     .from(trucks)
     .where(and(eq(trucks.orgId, orgId), eq(trucks.plate, normalizeReference(reference))))
     .get() as { id: string } | undefined;
-  if (!byPlate) throw new BusinessError(`Truck ${normalizeReference(reference)} is not registered`);
-  return byPlate.id;
+  if (byPlate) return byPlate.id;
+
+  if (!createIfMissing) throw new BusinessError(`Truck ${normalizeReference(reference)} is not registered`);
+
+  const id = createId();
+  db.insert(trucks)
+    .values({ id, orgId, plate: normalizeReference(reference), createdVia: 'movement' })
+    .run();
+  return id;
 }
 
 function resolveDeviceId(db: DbClient, orgId: string, serialOrId: string): string {
@@ -797,7 +812,7 @@ function resolveMovementActionIds(
     case 'new_assignment':
       return {
         ...action,
-        truckId: resolveTruckId(db, orgId, action.truckId),
+        truckId: resolveTruckId(db, orgId, action.truckId, true),
         motherDeviceId: resolveDeviceId(db, orgId, action.motherDeviceId),
       };
     case 'removed_to_inventory':
@@ -821,7 +836,7 @@ function resolveMovementActionIds(
       return {
         ...action,
         deviceId: resolveDeviceId(db, orgId, action.deviceId),
-        toTruckId: resolveTruckId(db, orgId, action.toTruckId),
+        toTruckId: resolveTruckId(db, orgId, action.toTruckId, true),
       };
     default:
       return assertNever(action, 'resolveMovementActionIds');

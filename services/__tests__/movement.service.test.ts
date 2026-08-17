@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { eq, isNull, and } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { truckAssignments, movementLogs, devices } from '../../db/schema';
+import { truckAssignments, movementLogs, devices, trucks } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
 import { checkIncomingDeviceConflict, resolveTruckSwap, dispatchMovementAction } from '../movement.service';
@@ -53,7 +53,7 @@ describe('movement.service — dispatchMovementAction resolves plate/serial inpu
     expect(newTruck.truckId).not.toBe(truckA);
   });
 
-  it('rejects an unregistered serial/plate with a clear error, not a silent id mismatch', () => {
+  it('rejects an unregistered device serial with a clear error, not a silent id mismatch', () => {
     const { db } = createTestDb();
     const { orgId, installerId } = seedBaseFixtures(db);
 
@@ -63,7 +63,48 @@ describe('movement.service — dispatchMovementAction resolves plate/serial inpu
         actorUserId: installerId,
         action: { kind: 'new_assignment', truckId: 'GHOST-PLATE', motherDeviceId: 'GHOST-SERIAL' },
       }),
+    ).toThrow(/Device GHOST-SERIAL not found/);
+  });
+
+  it('rejects an unregistered truck plate for sub_replacement — that truckId refers to an existing kit, not a plausibly-new truck', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const motherId = createDevice(db, orgId, { type: 'mother', serial: 'SR-MOTHER-1', status: 'in_service' });
+    const newSubId = createDevice(db, orgId, { type: 'sub', serial: 'SR-NEWSUB-1' });
+    void motherId;
+    void newSubId;
+
+    expect(() =>
+      dispatchMovementAction(db, {
+        orgId,
+        actorUserId: installerId,
+        action: {
+          kind: 'sub_replacement',
+          truckId: 'GHOST-PLATE',
+          motherDeviceId: 'SR-MOTHER-1',
+          slot: 'B',
+          newSubDeviceId: 'SR-NEWSUB-1',
+          reason: 'operational_swap',
+        },
+      }),
     ).toThrow(/GHOST-PLATE is not registered/);
+  });
+
+  it('new_assignment auto-creates a never-before-seen truck plate, mirroring install-time truck creation', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    createDevice(db, orgId, { type: 'mother', serial: 'BRAND-NEW-MOM' });
+
+    dispatchMovementAction(db, {
+      orgId,
+      actorUserId: installerId,
+      action: { kind: 'new_assignment', truckId: 'never-seen-plate', motherDeviceId: 'BRAND-NEW-MOM' },
+    });
+
+    const truck = db.select().from(trucks).where(eq(trucks.plate, 'NEVER-SEEN-PLATE')).get()!;
+    expect(truck.createdVia).toBe('movement');
+    const assignment = db.select().from(truckAssignments).where(eq(truckAssignments.truckId, truck.id)).get()!;
+    expect(assignment.removedAt).toBeNull();
   });
 });
 
