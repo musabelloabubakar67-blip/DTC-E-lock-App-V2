@@ -6,8 +6,10 @@ import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import com.directtrucking.elock.BuildConfig
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -729,6 +731,16 @@ private class SecureCookieJar(context: Context) : CookieJar {
         preferences.edit().putString(COOKIE_PREF, encrypt(rows.toString())).apply()
     }
 
+    // A decrypt failure here almost always means the process was recreated (app backgrounded
+    // and reopened, or the OS killed it to reclaim memory) between saving the session cookie
+    // and reading it back. Only KeyPermanentlyInvalidatedException means the AndroidKeyStore key
+    // is genuinely, unrecoverably gone (e.g. the device's lock-screen credential was removed) —
+    // that's the one case where clearing the stored cookie is correct, since it can never be
+    // decrypted again. Any other exception (a Cipher/KeyStore provider not fully initialized
+    // yet, a transient I/O hiccup) is very likely to succeed on the next read, so we must NOT
+    // wipe the user's still-valid, still-unexpired 7-day session cookie over it — that was
+    // exactly the bug: field installers were being silently signed out every time they reopened
+    // the app, for no server-side reason at all.
     private fun read(): List<Cookie> = try {
         val saved = preferences.getString(COOKIE_PREF, null) ?: return emptyList()
         val rows = JSONArray(decrypt(saved))
@@ -743,8 +755,12 @@ private class SecureCookieJar(context: Context) : CookieJar {
                 add(builder.build())
             }
         }
-    } catch (_: Exception) {
+    } catch (error: KeyPermanentlyInvalidatedException) {
+        Log.w("DtcSession", "Session key permanently invalidated; signing out.", error)
         preferences.edit().remove(COOKIE_PREF).apply()
+        emptyList()
+    } catch (error: Exception) {
+        Log.w("DtcSession", "Could not decrypt saved session this launch; will retry next time without discarding it.", error)
         emptyList()
     }
 
