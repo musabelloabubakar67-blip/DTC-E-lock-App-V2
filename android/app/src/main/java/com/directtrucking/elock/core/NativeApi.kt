@@ -180,10 +180,20 @@ class DtcApi(private val context: Context) {
             .add("callbackUrl", "$baseUrl/")
             .add("json", "true")
             .build()
-        executeJson(
+        // next-auth's credentials callback (with X-Auth-Return-Redirect) always answers 200,
+        // success or failure alike — it reports which one happened via the "url" field, not the
+        // HTTP status. Ignoring that field (as this used to) meant a wrong password produced no
+        // session cookie, fell through to the dashboard fetch below, got a 401 from that
+        // unrelated call, and surfaced as "Your session has expired" — actively hiding that the
+        // real problem was just bad credentials.
+        val callback = executeJson(
             Request.Builder().url("$baseUrl/api/auth/callback/credentials")
                 .header("X-Auth-Return-Redirect", "1").post(form).build(),
         )
+        val redirectUrl = callback.optString("url")
+        if (redirectUrl.contains("error=")) {
+            throw ApiException("Incorrect username or password", 401)
+        }
         bootstrapBlocking()
     }
 
