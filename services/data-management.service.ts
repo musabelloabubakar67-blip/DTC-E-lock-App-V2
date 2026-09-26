@@ -2,6 +2,7 @@ import type { Database } from 'better-sqlite3';
 import { AuthzError } from '../lib/errors';
 import type { AuthenticatedUser } from './auth.service';
 import { requireSupervisor } from './auth.service';
+import { EXPORT_REPORTS, humanizeValue } from './export-reports';
 
 export type ExportFormat = 'csv' | 'json';
 
@@ -53,33 +54,51 @@ export const EXPORT_DATASETS: ExportDataset[] = [
 ];
 
 export type ExportSummary = {
-  key: ExportDatasetKey;
+  key: string;
   label: string;
+  description?: string;
+  kind: 'report' | 'raw';
   rowCount: number;
 };
 
 export function listExportSummaries(sqlite: Database, actor: AuthenticatedUser): ExportSummary[] {
   const supervisor = requireSupervisor(actor);
 
-  return EXPORT_DATASETS.map((dataset) => ({
-    key: dataset.key,
-    label: dataset.label,
-    rowCount: countRows(sqlite, dataset, supervisor.orgId),
-  }));
+  return [
+    ...EXPORT_REPORTS.map((report) => ({
+      key: report.key,
+      label: report.label,
+      description: report.description,
+      kind: 'report' as const,
+      rowCount: Number((sqlite.prepare(report.countSql).get({ org: supervisor.orgId }) as { count?: number } | undefined)?.count ?? 0),
+    })),
+    ...EXPORT_DATASETS.map((dataset) => ({
+      key: dataset.key,
+      label: dataset.label,
+      kind: 'raw' as const,
+      rowCount: countRows(sqlite, dataset, supervisor.orgId),
+    })),
+  ];
 }
 
 export function buildExport(sqlite: Database, actor: AuthenticatedUser, input: { dataset: string; format: string }) {
   const supervisor = requireSupervisor(actor);
+  const report = EXPORT_REPORTS.find((entry) => entry.key === input.dataset);
   const dataset = EXPORT_DATASETS.find((entry) => entry.key === input.dataset);
   const format: ExportFormat = input.format === 'json' ? 'json' : 'csv';
 
-  if (!dataset) {
+  if (!report && !dataset) {
     throw new AuthzError('Unknown export dataset.');
   }
 
-  const rows = readRows(sqlite, dataset, supervisor.orgId);
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `dtc-${dataset.key}-${timestamp}.${format}`;
+  const rows = report
+    ? (sqlite.prepare(report.sql).all({ org: supervisor.orgId }) as Array<Record<string, unknown>>).map((row) => {
+      for (const column of report.humanize) row[column] = humanizeValue(row[column]);
+      return row;
+    })
+    : readRows(sqlite, dataset!, supervisor.orgId);
+  const timestamp = new Date().toISOString().slice(0, 10);
+  const filename = `dtc-${(report ?? dataset)!.key.replaceAll('_', '-')}-${timestamp}.${format}`;
   const body = format === 'json' ? JSON.stringify(rows, null, 2) : toCsv(rows);
   const contentType = format === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8';
 
@@ -107,12 +126,15 @@ function toCsv(rows: Array<Record<string, unknown>>): string {
   const columns = Object.keys(rows[0]);
   const header = columns.map(csvCell).join(',');
   const body = rows.map((row) => columns.map((column) => csvCell(row[column])).join(',')).join('\n');
-  return `${header}\n${body}\n`;
+  // BOM so Excel reads UTF-8 correctly.
+  return `﻿${header}\n${body}\n`;
 }
 
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return '';
   const text = String(value);
+  // Long digit-only serials (mother locks) would otherwise be shown by Excel as 4.87069E+11.
+  if (/^\d{11,}$/.test(text)) return `="${text}"`;
   if (!/[",\n\r]/.test(text)) return text;
   return `"${text.replaceAll('"', '""')}"`;
 }

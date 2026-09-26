@@ -2213,3 +2213,6 @@
 .app-shell[data-viewport="tablet-portrait"] #registered-kits .registry-batch-bar > .btn {
   width: 100%;
 }
+
+.export-advanced { margin-top: 12px; }
+.export-advanced > summary { cursor: pointer; padding: 8px 0; font-weight: 600; color: var(--text-muted, inherit); }

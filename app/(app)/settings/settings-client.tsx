@@ -292,10 +292,32 @@ export default function SettingsClient({
             <BackfillRegistrationPanel />
             <InstallationVerificationBackfillPanel />
             <h2 className="settings-group-heading">Data exports</h2>
-            <Panel title="Exports" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
-              <p className="settings-panel-copy">Export operational records in CSV or JSON.</p>
+            <Panel title="Reports" action={<FileSpreadsheet className="settings-panel-icon" aria-hidden="true" />}>
+              <p className="settings-panel-copy">Readable reports with serials, plates, names and Lagos dates. CSV opens directly in Excel.</p>
               <div className="export-list" role="list">
-                {exportSummaries.map((item) => (
+                {exportSummaries.filter((item) => item.kind === 'report').map((item) => (
+                  <article className="export-row" key={item.key} role="listitem">
+                    <div className="export-card__body">
+                      <strong>{item.label}</strong>
+                      <span>{item.description}</span>
+                      <span>{item.rowCount.toLocaleString()} rows</span>
+                    </div>
+                    <div className="export-card__actions">
+                      <a className="btn btn--primary btn--compact" href={`/api/settings/exports?dataset=${item.key}&format=csv`}>
+                        <FileSpreadsheet aria-hidden="true" />
+                        Excel (CSV)
+                      </a>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </Panel>
+            <details className="export-advanced">
+              <summary>Advanced / backup: raw database tables</summary>
+            <Panel title="Raw tables" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
+              <p className="settings-panel-copy">Unprocessed table copies with internal ids. Use for backups or technical investigation.</p>
+              <div className="export-list" role="list">
+                {exportSummaries.filter((item) => item.kind === 'raw').map((item) => (
                   <article className="export-row" key={item.key} role="listitem">
                     <div className="export-card__body">
                       <strong>{item.label}</strong>
@@ -315,6 +337,7 @@ export default function SettingsClient({
                 ))}
               </div>
             </Panel>
+            </details>
           </div>
         )}
       </section>
