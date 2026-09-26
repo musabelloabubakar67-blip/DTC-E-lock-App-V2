@@ -183,7 +183,7 @@ describe('native installation workflow', () => {
     expect(db.select().from(truckAssignments).where(eq(truckAssignments.truckId, truck.id)).all()).toHaveLength(1);
   });
 
-  it('rejects a registered sub-lock from another kit without writing a partial install', () => {
+  it('reclaims a sub-lock registered to another kit when the field scan puts it on this mother', () => {
     const { db } = createTestDb();
     const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
     const partial = registerIncompleteKit(db, {
@@ -191,9 +191,9 @@ describe('native installation workflow', () => {
       motherSerial: 'TARGET-MOTHER',
       subSerials: ['TARGET-SUB-B', 'TARGET-SUB-C'],
     });
-    registerTestKit(db, orgId, installerId, 'OTHER');
+    const other = registerTestKit(db, orgId, installerId, 'OTHER');
 
-    expect(() => recordNativeInstallation(db, {
+    recordNativeInstallation(db, {
       orgId,
       actorUserId: installerId,
       payload: {
@@ -203,19 +203,39 @@ describe('native installation workflow', () => {
         company: 'mrs',
         installMode: 'changed',
       },
-    })).toThrow(
-      'Sub-lock OTHER-SUB-B is registered to kit OTHER-MOTHER and cannot complete kit TARGET-MOTHER',
-    );
+    });
 
-    expect(db.select().from(trucks).where(eq(trucks.plate, 'BLOCK101')).all()).toHaveLength(0);
-    expect(
-      db
-        .select()
-        .from(kitMembers)
-        .where(and(eq(kitMembers.motherDeviceId, partial.motherDeviceId), isNull(kitMembers.removedAt)))
-        .all(),
-    ).toHaveLength(2);
-    expect(db.select().from(truckAssignments).all()).toHaveLength(0);
+    const openMembers = (motherId: string) => db
+      .select()
+      .from(kitMembers)
+      .where(and(eq(kitMembers.motherDeviceId, motherId), isNull(kitMembers.removedAt)))
+      .all();
+    expect(openMembers(partial.motherDeviceId)).toHaveLength(3);
+    expect(openMembers(other.motherDeviceId)).toHaveLength(2);
+    expect(db.select().from(truckAssignments).all()).toHaveLength(1);
+  });
+
+  it('auto-registers a never-seen mother scanned during an install', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+
+    recordNativeInstallation(db, {
+      orgId,
+      actorUserId: installerId,
+      payload: {
+        truckPlate: 'NEWM101',
+        motherSerial: 'GHOST-MOTHER',
+        subSerials: ['GHOST-SUB-B', 'GHOST-SUB-C', 'GHOST-SUB-D'],
+        company: 'mrs',
+        installMode: 'changed',
+      },
+    });
+
+    const mother = db.select().from(devices).where(eq(devices.serial, 'GHOST-MOTHER')).get()!;
+    expect(mother.origin).toBe('discovered');
+    expect(mother.deviceType).toBe('mother');
+    expect(db.select().from(kitMembers).where(eq(kitMembers.motherDeviceId, mother.id)).all()).toHaveLength(3);
+    expect(db.select().from(slotPairings).where(isNull(slotPairings.unpairedAt)).all()).toHaveLength(3);
   });
 
   it('applies a scanned changed kit without creating a review', () => {
