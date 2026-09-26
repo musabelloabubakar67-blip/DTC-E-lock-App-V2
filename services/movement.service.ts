@@ -676,6 +676,47 @@ export type ChangeTruckCompanyInput = {
   loggedDate?: number;
 };
 
+export type SetTruckActiveInput = {
+  orgId: string;
+  actor: AuthenticatedUser;
+  truckId: string; // plate or internal id — resolved via resolveTruckId
+  isActive: boolean;
+  notes?: string;
+};
+
+/**
+ * Supervisor-only: deactivates (or reactivates) a truck record — e.g. a stray record created by
+ * a plate typo/misread during a kit-change install, distinct from the truck the technician meant
+ * to scan. Deactivated trucks drop out of "available for assignment" counts (see
+ * dashboard.service.ts) but the row and its history are kept, not deleted.
+ */
+export function setTruckActive(db: DbClient, input: SetTruckActiveInput): { truckId: string } {
+  requireSupervisor(input.actor);
+  const truckId = resolveTruckId(db, input.orgId, input.truckId);
+
+  const now = nowSeconds();
+  const before = db.select({ isActive: trucks.isActive }).from(trucks).where(eq(trucks.id, truckId)).get() as
+    | { isActive: number }
+    | undefined;
+
+  db.update(trucks).set({ isActive: input.isActive ? 1 : 0 }).where(eq(trucks.id, truckId)).run();
+
+  db.insert(auditLog)
+    .values({
+      id: createId(),
+      orgId: input.orgId,
+      actorUserId: input.actor.id,
+      entityTable: 'trucks',
+      entityId: truckId,
+      operation: 'transition',
+      beforeJson: JSON.stringify({ isActive: Boolean(before?.isActive) }),
+      afterJson: JSON.stringify({ isActive: input.isActive, notes: input.notes, at: now }),
+    })
+    .run();
+
+  return { truckId };
+}
+
 export function changeTruckCompany(
   db: DbClient,
   input: ChangeTruckCompanyInput,

@@ -4,7 +4,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { truckAssignments, movementLogs, devices, trucks } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
-import { checkIncomingDeviceConflict, resolveTruckSwap, dispatchMovementAction } from '../movement.service';
+import { checkIncomingDeviceConflict, resolveTruckSwap, dispatchMovementAction, setTruckActive } from '../movement.service';
 
 describe('movement.service — dispatchMovementAction resolves plate/serial inputs', () => {
   it('new_assignment: accepts a truck plate and device serial, not just internal ids', () => {
@@ -286,5 +286,29 @@ describe('movement.service — swap atomicity under failure (hardening)', () => 
 
     const logs = db.select().from(movementLogs).where(eq(movementLogs.action, 'truck_swap')).all();
     expect(logs).toHaveLength(0); // no movement_log for a swap that never actually happened
+  });
+});
+
+describe('movement.service — setTruckActive', () => {
+  it('deactivates a truck by plate and writes an audit entry', () => {
+    const { db } = createTestDb();
+    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const actor = { id: supervisorId, orgId, role: 'supervisor' as const };
+    createTruck(db, orgId, 'STRAYPLATE1');
+
+    const result = setTruckActive(db, { orgId, actor, truckId: 'strayplate1', isActive: false, notes: 'Stray record from a plate typo' });
+
+    const truck = db.select().from(trucks).where(eq(trucks.id, result.truckId)).get()!;
+    expect(truck.isActive).toBe(0);
+  });
+
+  it('rejects a non-supervisor', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'STRAYPLATE2');
+
+    expect(() =>
+      setTruckActive(db, { orgId, actor: { id: installerId, orgId, role: 'installer' }, truckId, isActive: false }),
+    ).toThrow();
   });
 });
