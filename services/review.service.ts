@@ -1,6 +1,6 @@
 import { createId } from '@paralleldrive/cuid2';
 import { and, desc, eq } from 'drizzle-orm';
-import { auditLog, conflictReviews } from '../db/schema';
+import { auditLog, conflictReviews, syncMutations, users } from '../db/schema';
 import { BusinessError } from '../lib/errors';
 import { requireSupervisor, type AuthenticatedUser } from './auth.service';
 import { applySyncBatch, type MutationOutcome } from './sync.service';
@@ -286,7 +286,7 @@ export function retryConflictReview(
 
   const [outcome] = applySyncBatch(db, {
     orgId: input.actor.orgId,
-    actor: input.actor,
+    actor: originalFieldActor(db, input.actor, text(queued.id)),
     mutations: [{
       id: `${text(queued.id) || input.reviewId}:retry:${createId()}`,
       endpoint,
@@ -308,6 +308,20 @@ export function retryConflictReview(
     resolutionNotes: [input.resolutionNotes?.trim(), automaticNote].filter(Boolean).join(' '),
   }, 'resolved');
   return outcome;
+}
+
+// Credit the retried operation to the user who did the work in the field, not the
+// supervisor pressing Retry.
+function originalFieldActor(db: DbClient, supervisor: AuthenticatedUser, queuedId: string): AuthenticatedUser {
+  const baseId = queuedId.split(':retry:')[0];
+  if (!baseId) return supervisor;
+  const original = db
+    .select({ id: users.id, role: users.role })
+    .from(syncMutations)
+    .innerJoin(users, eq(users.id, syncMutations.userId))
+    .where(and(eq(syncMutations.clientMutationId, baseId), eq(users.orgId, supervisor.orgId)))
+    .get() as { id: string; role: AuthenticatedUser['role'] } | undefined;
+  return original ? { id: original.id, orgId: supervisor.orgId, role: original.role } : supervisor;
 }
 
 function parsePayload(raw: string): Record<string, unknown> {

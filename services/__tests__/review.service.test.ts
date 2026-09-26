@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { and, eq, isNull } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
-import { conflictReviews, devices, truckAssignments, auditLog, organisations, users, trucks } from '../../db/schema';
+import { conflictReviews, devices, truckAssignments, auditLog, organisations, users, trucks, syncMutations, installationLogs } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
 import { seedBaseFixtures, createTruck, createDevice } from '../../tests/helpers/fixtures';
 import {
@@ -179,7 +179,15 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
 
   it('retries a preserved failed new-truck installation and resolves its original review', () => {
     const { db } = createTestDb();
-    const { orgId, supervisorId } = seedBaseFixtures(db);
+    const { orgId, supervisorId, installerId } = seedBaseFixtures(db);
+    db.insert(syncMutations).values({
+      clientMutationId: 'failed-new-truck',
+      orgId,
+      userId: installerId,
+      kind: '/api/mobile/installations',
+      status: 'conflicted',
+      clientTs: 1,
+    }).run();
     createDevice(db, orgId, { type: 'mother', serial: 'RETRY-MOTHER-1', status: 'available' });
     ['RETRY-SUB-B', 'RETRY-SUB-C', 'RETRY-SUB-D'].forEach((serial) => {
       createDevice(db, orgId, { type: 'sub', serial, status: 'available' });
@@ -226,5 +234,6 @@ describe('Review (§7 /review over conflict_reviews) — resolve is acknowledgem
     ).toBeTruthy();
     expect(db.select().from(conflictReviews).where(eq(conflictReviews.status, 'open')).all()).toHaveLength(0);
     expect(db.select().from(auditLog).where(eq(auditLog.entityId, reviewId)).all()).not.toHaveLength(0);
+    expect(db.select().from(installationLogs).where(eq(installationLogs.truckId, truck.id)).get()!.actorUserId).toBe(installerId);
   });
 });

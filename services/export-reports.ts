@@ -1,7 +1,7 @@
 // Human-readable reports: one row = one thing, serials/plates/names instead of internal ids,
 // Lagos local dates instead of unix seconds.
 
-export type ReportKey = 'fleet_status' | 'installations' | 'movements' | 'device_inventory' | 'faults';
+export type ReportKey = 'fleet_status' | 'installations' | 'movements' | 'device_inventory' | 'registrations' | 'available_mothers' | 'faults';
 
 export type ExportReport = {
   key: ReportKey;
@@ -31,7 +31,15 @@ const subAtInstall = (slot: string) => `(
   order by sp.paired_at desc limit 1
 )`;
 
-const latestVerification = (column: string) => `(
+const registeredSub = (n: number) => `(
+  select d.serial from kit_members km join devices d on d.id = km.sub_device_id
+  where km.mother_device_id = m.id and km.removed_at is null
+  order by km.added_at, d.serial limit 1 offset ${n - 1}
+)`;
+
+const registeredCount = `(select count(*) from kit_members km where km.mother_device_id = m.id and km.removed_at is null)`;
+
+const latestVerification =(column: string) => `(
   select ${column} from verifications v where v.truck_id = t.id order by v.verified_at desc limit 1
 )`;
 
@@ -163,6 +171,60 @@ export const EXPORT_REPORTS: ExportReport[] = [
       from devices d
       where d.org_id = @org
       order by d.device_type, d.serial`,
+  },
+  {
+    key: 'registrations',
+    label: 'Registrations',
+    description: 'One row per registered mother: registration date and who did it, SIM, its registered sub-locks, and where it is now.',
+    humanize: ['Status', 'Source'],
+    countSql: `select count(*) as count from registration_logs where org_id = @org`,
+    sql: `
+      select
+        ${day('rl.logged_date')} as "Registered on",
+        u.display_name as "Registered by",
+        m.serial as "Mother lock",
+        coalesce(rl.sim_number, m.sim_number) as "SIM",
+        ${registeredSub(1)} as "Sub-lock 1",
+        ${registeredSub(2)} as "Sub-lock 2",
+        ${registeredSub(3)} as "Sub-lock 3",
+        case when ${registeredCount} >= 3 then 'Complete' else ${registeredCount} || ' of 3' end as "Kit registered",
+        m.lifecycle_status as "Status",
+        (select t.plate from truck_assignments ta join trucks t on t.id = ta.truck_id
+          where ta.device_id = m.id and ta.removed_at is null) as "On truck",
+        rl.source as "Source",
+        rl.notes as "Notes"
+      from registration_logs rl
+      join devices m on m.id = rl.mother_device_id
+      join users u on u.id = rl.actor_user_id
+      where rl.org_id = @org
+      order by rl.logged_date desc`,
+  },
+  {
+    key: 'available_mothers',
+    label: 'Available mothers',
+    description: 'Mother locks in stock and ready to install: not on any truck, not in repair. Shows their registered sub-locks and last truck.',
+    humanize: [],
+    countSql: `select count(*) as count from devices m where m.org_id = @org and m.device_type = 'mother'
+      and m.lifecycle_status = 'available' and m.ownership_status = 'owned'
+      and not exists (select 1 from truck_assignments ta where ta.device_id = m.id and ta.removed_at is null)`,
+    sql: `
+      select
+        m.serial as "Mother lock",
+        m.sim_number as "SIM",
+        ${registeredSub(1)} as "Sub-lock 1",
+        ${registeredSub(2)} as "Sub-lock 2",
+        ${registeredSub(3)} as "Sub-lock 3",
+        case when ${registeredCount} >= 3 then 'Complete' else ${registeredCount} || ' of 3' end as "Kit registered",
+        ${day('m.registered_at')} as "Registered on",
+        (select u.display_name from users u where u.id = m.registered_by) as "Registered by",
+        (select t.plate from truck_assignments ta join trucks t on t.id = ta.truck_id
+          where ta.device_id = m.id order by ta.removed_at desc limit 1) as "Last truck",
+        ${day(`(select max(ta.removed_at) from truck_assignments ta where ta.device_id = m.id)`)} as "Removed from last truck on"
+      from devices m
+      where m.org_id = @org and m.device_type = 'mother'
+        and m.lifecycle_status = 'available' and m.ownership_status = 'owned'
+        and not exists (select 1 from truck_assignments ta where ta.device_id = m.id and ta.removed_at is null)
+      order by (${registeredCount} >= 3) desc, m.registered_at desc`,
   },
   {
     key: 'faults',

@@ -53,7 +53,7 @@ describe('readable export reports', () => {
 
   it('runs every report and keeps mother serials intact for Excel', () => {
     const { sqlite, actor } = setup();
-    for (const key of ['fleet_status', 'installations', 'movements', 'device_inventory', 'faults']) {
+    for (const key of ['fleet_status', 'installations', 'movements', 'device_inventory', 'registrations', 'available_mothers', 'faults']) {
       expect(() => buildExport(sqlite, actor, { dataset: key, format: 'csv' })).not.toThrow();
     }
     const { body } = buildExport(sqlite, actor, { dataset: 'installations', format: 'csv' });
