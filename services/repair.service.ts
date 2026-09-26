@@ -69,44 +69,165 @@ function writeMovementAudit(
     .run();
 }
 
-function loadIncomingDevice(
-  db: DbClient,
-  input: { orgId: string; serial: string; expectedType: 'mother' | 'sub' },
+function writeAudit(
+  tx: DbClient,
+  input: { orgId: string; actorUserId: string; entityTable: string; entityId: string; operation: 'create' | 'transition'; before?: unknown; after: unknown },
+): void {
+  tx.insert(auditLog)
+    .values({
+      id: createId(),
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      entityTable: input.entityTable,
+      entityId: input.entityId,
+      operation: input.operation,
+      beforeJson: input.before === undefined ? null : JSON.stringify(input.before),
+      afterJson: JSON.stringify(input.after),
+    })
+    .run();
+}
+
+// The installer is physically holding the replacement, so the records bend to the scan:
+// unknown serials are registered, stale pairings elsewhere are released, and a lock still
+// marked for repair is returned to service. Every correction is audited.
+function claimIncomingDevice(
+  tx: DbClient,
+  input: {
+    orgId: string;
+    actorUserId: string;
+    serial: string;
+    expectedType: 'mother' | 'sub';
+    truckId: string;
+    currentMotherId: string;
+    truckPlate: string;
+  },
 ): DeviceRow {
   const serial = normalize(input.serial);
-  const device = db
+  const now = Math.floor(Date.now() / 1000);
+  let device = tx
     .select()
     .from(devices)
     .where(and(eq(devices.orgId, input.orgId), eq(devices.serial, serial)))
     .get() as DeviceRow | undefined;
 
-  if (!device) throw new BusinessError(`Replacement device ${serial} is not registered`);
+  if (!device) {
+    const id = createId();
+    tx.insert(devices)
+      .values({
+        id,
+        orgId: input.orgId,
+        deviceType: input.expectedType,
+        serial,
+        lifecycleStatus: 'available',
+        registeredAt: now,
+        registeredBy: input.actorUserId,
+        origin: 'discovered',
+        notes: `Scanned as a repair replacement on ${input.truckPlate}; never previously registered.`,
+      })
+      .run();
+    writeAudit(tx, {
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      entityTable: 'devices',
+      entityId: id,
+      operation: 'create',
+      after: { serial, deviceType: input.expectedType, origin: 'discovered', via: 'repair_replacement_unregistered', truckPlate: input.truckPlate },
+    });
+    return tx.select().from(devices).where(eq(devices.id, id)).get() as DeviceRow;
+  }
+
   if (device.deviceType !== input.expectedType) {
     throw new BusinessError(`${serial} is a ${device.deviceType} device, not ${input.expectedType}`);
   }
   if (device.ownershipStatus !== 'owned') {
     throw new BusinessError(`Replacement device ${serial} is released externally`);
   }
-  if (device.lifecycleStatus !== 'available') {
-    throw new BusinessError(`Replacement device ${serial} is '${device.lifecycleStatus}', not available`);
-  }
 
-  if (device.deviceType === 'mother') {
-    const assignment = db
-      .select({ id: truckAssignments.id })
-      .from(truckAssignments)
-      .where(and(eq(truckAssignments.deviceId, device.id), isNull(truckAssignments.removedAt)))
-      .get();
-    if (assignment) throw new BusinessError(`Replacement mother ${serial} is already assigned`);
-  } else {
-    const pairing = db
-      .select({ id: slotPairings.id })
+  const logRelease = (sourceTruckId: string | null, slot: 'B' | 'C' | 'D' | null, disposition: string) => {
+    const movementLogId = createId();
+    tx.insert(movementLogs)
+      .values({
+        id: movementLogId,
+        orgId: input.orgId,
+        actorUserId: input.actorUserId,
+        loggedDate: now,
+        action: 'unlogged_swap_detected',
+        truckId: sourceTruckId,
+        outDeviceId: device!.id,
+        outReason: 'operational_swap',
+        outDisposition: disposition,
+        slot,
+        notes: `Scanned as a repair replacement on ${input.truckPlate}`,
+      })
+      .run();
+    writeMovementAudit(tx, {
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      movementLogId,
+      payload: { action: 'unlogged_swap_detected', sourceTruckId, targetTruckId: input.truckId, outDeviceId: device!.id, slot, source: 'repair_replacement_scan' },
+    });
+  };
+
+  if (device.deviceType === 'sub') {
+    const pairing = tx
+      .select()
       .from(slotPairings)
       .where(and(eq(slotPairings.subDeviceId, device.id), isNull(slotPairings.unpairedAt)))
-      .get();
-    if (pairing) throw new BusinessError(`Replacement sub-lock ${serial} is already paired`);
+      .get() as { id: string; motherDeviceId: string; slot: 'B' | 'C' | 'D' } | undefined;
+    if (pairing) {
+      if (pairing.motherDeviceId === input.currentMotherId) {
+        throw new BusinessError(`Replacement sub-lock ${serial} is already on this truck in slot ${pairing.slot}`);
+      }
+      const source = tx
+        .select({ truckId: truckAssignments.truckId })
+        .from(truckAssignments)
+        .where(and(eq(truckAssignments.deviceId, pairing.motherDeviceId), isNull(truckAssignments.removedAt)))
+        .get() as { truckId: string } | undefined;
+      const { disposition } = applyRemoval(tx, { deviceId: device.id, actorUserId: input.actorUserId, reason: 'operational_swap', disposition: 'available_pool' });
+      tx.update(slotPairings)
+        .set({ unpairedAt: now, unpairedBy: input.actorUserId, removalReason: 'operational_swap', disposition, removalNotes: `Scanned as a repair replacement on ${input.truckPlate}` })
+        .where(eq(slotPairings.id, pairing.id))
+        .run();
+      logRelease(source?.truckId ?? null, pairing.slot, disposition);
+    }
+  } else {
+    const assignment = tx
+      .select()
+      .from(truckAssignments)
+      .where(and(eq(truckAssignments.deviceId, device.id), isNull(truckAssignments.removedAt)))
+      .get() as { id: string; truckId: string } | undefined;
+    if (assignment) {
+      if (assignment.truckId === input.truckId) {
+        throw new BusinessError(`${serial} is already installed in ${positionLabel('mother')}`);
+      }
+      const { disposition } = applyRemoval(tx, { deviceId: device.id, actorUserId: input.actorUserId, reason: 'operational_swap', disposition: 'available_pool' });
+      tx.update(truckAssignments)
+        .set({ removedAt: now, removedBy: input.actorUserId, removalReason: 'operational_swap', disposition, removalNotes: `Scanned as a repair replacement on ${input.truckPlate}` })
+        .where(eq(truckAssignments.id, assignment.id))
+        .run();
+      logRelease(assignment.truckId, null, disposition);
+    }
   }
 
+  device = tx.select().from(devices).where(eq(devices.id, device.id)).get() as DeviceRow;
+  if (device.lifecycleStatus === 'repair' || device.lifecycleStatus === 'in_service') {
+    tx.update(devices)
+      .set({ lifecycleStatus: 'available', updatedAt: now })
+      .where(eq(devices.id, device.id))
+      .run();
+    writeAudit(tx, {
+      orgId: input.orgId,
+      actorUserId: input.actorUserId,
+      entityTable: 'devices',
+      entityId: device.id,
+      operation: 'transition',
+      before: { lifecycleStatus: device.lifecycleStatus },
+      after: { lifecycleStatus: 'available', via: 'repair_replacement_scan', truckPlate: input.truckPlate },
+    });
+    device = { ...device, lifecycleStatus: 'available' };
+  } else if (device.lifecycleStatus !== 'available') {
+    throw new BusinessError(`Replacement device ${serial} is '${device.lifecycleStatus}', not available`);
+  }
   return device;
 }
 
@@ -179,23 +300,8 @@ export function executeRepairBatch(
     outgoingByPosition.set(item.position, device);
   }
 
-  const incomingByPosition = new Map<Position, DeviceRow>();
-  for (const item of input.repair.items) {
-    if (!item.replacementSerial) continue;
-    const incoming = loadIncomingDevice(db, {
-      orgId: input.orgId,
-      serial: item.replacementSerial,
-      expectedType: item.position === 'mother' ? 'mother' : 'sub',
-    });
-    if (incoming.id === outgoingByPosition.get(item.position)?.id) {
-      throw new BusinessError(`${incoming.serial} is already installed in ${positionLabel(item.position)}`);
-    }
-    incomingByPosition.set(item.position, incoming);
-  }
-
   const motherSelected = itemByPosition.has('mother');
-  const incomingMother = incomingByPosition.get('mother');
-  if (motherSelected && !incomingMother) {
+  if (motherSelected && !itemByPosition.get('mother')?.replacementSerial) {
     const hasIncomingSub = input.repair.items.some(
       (item) => item.position !== 'mother' && Boolean(item.replacementSerial),
     );
@@ -208,6 +314,24 @@ export function executeRepairBatch(
   const operations: RepairBatchResult['operations'] = [];
 
   return db.transaction((tx: DbClient) => {
+    const incomingByPosition = new Map<Position, DeviceRow>();
+    for (const item of input.repair.items) {
+      if (!item.replacementSerial) continue;
+      const serial = normalize(item.replacementSerial);
+      if (serial === outgoingByPosition.get(item.position)?.serial.toUpperCase()) {
+        throw new BusinessError(`${serial} is already installed in ${positionLabel(item.position)}`);
+      }
+      incomingByPosition.set(item.position, claimIncomingDevice(tx, {
+        orgId: input.orgId,
+        actorUserId: input.actorUserId,
+        serial,
+        expectedType: item.position === 'mother' ? 'mother' : 'sub',
+        truckId: truck.id,
+        currentMotherId: currentMother.id,
+        truckPlate: truck.plate,
+      }));
+    }
+    const incomingMother = incomingByPosition.get('mother');
     const targetMotherId = motherSelected ? incomingMother?.id ?? null : currentMother.id;
 
     for (const pairing of openPairings) {

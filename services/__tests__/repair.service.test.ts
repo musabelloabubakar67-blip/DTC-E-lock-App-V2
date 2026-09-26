@@ -187,6 +187,7 @@ describe('repair.service — atomic multi-device remove/replace', () => {
       serial: 'SUB-NEW-B',
       status: 'available',
     });
+    createDevice(fixture.db, fixture.orgId, { type: 'mother', serial: 'WRONG-TYPE', status: 'available' });
 
     expect(() => executeRepairBatch(fixture.db, {
       orgId: fixture.orgId,
@@ -197,14 +198,39 @@ describe('repair.service — atomic multi-device remove/replace', () => {
         description: 'Attempted two-device replacement',
         items: [
           { position: 'B', replacementSerial: 'SUB-NEW-B' },
-          { position: 'C', replacementSerial: 'NOT-REGISTERED' },
+          { position: 'C', replacementSerial: 'WRONG-TYPE' },
         ],
       },
-    })).toThrow('not registered');
+    })).toThrow('not sub');
 
     expect(statusOf(fixture.db, fixture.subIds[0])).toBe('in_service');
     expect(fixture.db.select().from(faultReports).all()).toHaveLength(0);
     expect(fixture.db.select().from(movementLogs).all()).toHaveLength(0);
+    expect(fixture.db.select().from(slotPairings).where(isNull(slotPairings.unpairedAt)).all()).toHaveLength(3);
+  });
+
+  it('trusts the scanned replacement: registers unknown locks and revives locks marked for repair', () => {
+    const fixture = setupInstalledKit();
+    createDevice(fixture.db, fixture.orgId, { type: 'sub', serial: 'SUB-IN-REPAIR', status: 'repair' });
+
+    executeRepairBatch(fixture.db, {
+      orgId: fixture.orgId,
+      actorUserId: fixture.installerId,
+      repair: {
+        truck: 'FZE700DI',
+        reason: 'faulty',
+        description: 'Field swap',
+        items: [
+          { position: 'B', replacementSerial: 'SUB-IN-REPAIR' },
+          { position: 'C', replacementSerial: 'NEVER-SEEN-SUB' },
+        ],
+      },
+    });
+
+    const bySerial = (serial: string) => fixture.db.select().from(devices).where(eq(devices.serial, serial)).get()!;
+    expect(bySerial('SUB-IN-REPAIR').lifecycleStatus).toBe('in_service');
+    expect(bySerial('NEVER-SEEN-SUB').origin).toBe('discovered');
+    expect(bySerial('NEVER-SEEN-SUB').lifecycleStatus).toBe('in_service');
     expect(fixture.db.select().from(slotPairings).where(isNull(slotPairings.unpairedAt)).all()).toHaveLength(3);
   });
 });

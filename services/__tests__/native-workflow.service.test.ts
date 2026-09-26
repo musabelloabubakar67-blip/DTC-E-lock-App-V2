@@ -411,24 +411,24 @@ describe('native installation workflow', () => {
           truck: 'FZE785DA',
           reason: 'faulty',
           description: 'Replace failed sub-lock C',
-          items: [{ position: 'C', replacementSerial: 'NOT-REGISTERED' }],
+          items: [{ position: 'C', replacementSerial: 'REPAIR-MOTHER' }],
         },
       }],
     });
 
     expect(replacementOutcome).toMatchObject({
       status: 'conflicted',
-      message: 'Replacement device NOT-REGISTERED is not registered',
+      message: 'REPAIR-MOTHER is a mother device, not sub',
     });
     const review = listOpenConflictReviews(db, orgId)[0];
     expect(review.presentation.title).toBe('Repair for FZE785DA was not applied');
     expect(review.presentation.details).toContainEqual({
       label: 'Requested operations',
-      value: 'Sub-lock C: replace with NOT-REGISTERED',
+      value: 'Sub-lock C: replace with REPAIR-MOTHER',
     });
     expect(review.presentation.details).toContainEqual({
       label: 'Why it failed',
-      value: 'Replacement device NOT-REGISTERED is not registered',
+      value: 'REPAIR-MOTHER is a mother device, not sub',
     });
   });
 });
