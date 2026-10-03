@@ -68,6 +68,40 @@ describe('sync-engine — confirm-before-clear', () => {
   });
 });
 
+describe('sync-engine — terminal outcomes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('conflicted and rejected mutations leave the queue; an error outcome stays queued for retry', async () => {
+    const db = freshDb();
+    const conflicted = await enqueueMutation(db, { endpoint: '/api/faults', payload: { a: 1 } });
+    const rejected = await enqueueMutation(db, { endpoint: '/api/faults', payload: { a: 2 } });
+    const errored = await enqueueMutation(db, { endpoint: '/api/faults', payload: { a: 3 } });
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          results: [
+            { id: conflicted.id, status: 'conflicted', message: 'x' },
+            { id: rejected.id, status: 'rejected', message: 'y' },
+            { id: errored.id, status: 'error', message: 'z' },
+          ],
+        }),
+      }),
+    );
+
+    const result = await syncPendingMutations(db);
+
+    expect(result.acked).toEqual([]);
+    expect(result.stillPending).toEqual([errored.id]);
+    expect((await db.mutations.toArray()).map((m) => m.id)).toEqual([errored.id]);
+  });
+});
+
 describe('sync-engine — retry safety', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

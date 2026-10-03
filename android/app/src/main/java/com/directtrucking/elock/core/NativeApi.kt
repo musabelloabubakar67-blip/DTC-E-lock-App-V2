@@ -581,6 +581,13 @@ class DtcApi(private val context: Context) {
                 409,
             )
         }
+        if (result.submittedStatus == "error") {
+            // Server-side failure: the change stays queued and retries, but say why it didn't land.
+            throw ApiException(
+                "Server error: ${result.submittedMessage ?: "unknown"}. Kept on this device and will retry.",
+                500,
+            )
+        }
         return result
     }
 

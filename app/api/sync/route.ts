@@ -30,6 +30,7 @@ export async function POST(request: Request) {
     if (error instanceof AuthzError) {
       return NextResponse.json({ error: { code: 'unauthorized', message: error.message } }, { status: 401 });
     }
+    console.error('[sync] batch failed', error);
     return NextResponse.json({ error: { code: 'internal_error', message: 'Sync failed' } }, { status: 500 });
   }
 }

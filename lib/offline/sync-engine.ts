@@ -4,7 +4,7 @@
 // (acks) its specific mutation ID. /api/sync (via services/sync.service.ts) does real dispatch
 // to the business services plus server-authoritative conflict handling — 'applied' means
 // applied, not merely received; see sync.service.ts for the ack-and-apply transaction.
-import type { OfflineDb } from './db';
+import { SYNC_REQUEST_EVENT, type OfflineDb } from './db';
 
 export type SyncResult = {
   pushed: number;
@@ -34,6 +34,7 @@ export async function syncPendingMutations(db: OfflineDb, endpoint = '/api/sync'
   const batch = pending.map((m) => ({ id: m.id, endpoint: m.endpoint, payload: m.payload, clientTs: m.clientTs, seq: m.seq }));
 
   let ackedIds: string[] = [];
+  let terminalIds: string[] = [];
   let reachedServer = false;
 
   try {
@@ -48,6 +49,10 @@ export async function syncPendingMutations(db: OfflineDb, endpoint = '/api/sync'
       const body = await response.json().catch(() => null);
       const results: { id: string; status: string }[] = body?.results ?? [];
       ackedIds = results.filter((r) => r.status === 'applied').map((r) => r.id);
+      // 'conflicted' and 'rejected' are terminal: the server ledgered them (conflicts go to a
+      // supervisor review with the full payload), so resending only re-acks the same status.
+      // Keeping them queued pinned the pending count above 0 and the backoff at its maximum.
+      terminalIds = results.filter((r) => r.status === 'conflicted' || r.status === 'rejected').map((r) => r.id);
     }
     // A non-ok response acks nothing — every pending mutation stays queued.
   } catch {
@@ -55,11 +60,12 @@ export async function syncPendingMutations(db: OfflineDb, endpoint = '/api/sync'
     // untouched and will be retried on the next trigger (online, focus, or backoff tick).
   }
 
-  if (ackedIds.length > 0) {
-    await db.mutations.bulkDelete(ackedIds);
+  const doneIds = [...ackedIds, ...terminalIds];
+  if (doneIds.length > 0) {
+    await db.mutations.bulkDelete(doneIds);
   }
 
-  const stillPendingIds = pending.map((m) => m.id).filter((id) => !ackedIds.includes(id));
+  const stillPendingIds = pending.map((m) => m.id).filter((id) => !doneIds.includes(id));
   if (stillPendingIds.length > 0) {
     await db.mutations
       .where('id')
@@ -80,8 +86,9 @@ const BASE_BACKOFF_MS = 5000;
 const MAX_BACKOFF_MS = 60000;
 
 /**
- * Wires the sync engine into the browser: fires on the `online` event, on window focus, and on
- * a periodic backoff timer (grows while the queue isn't draining, resets to base once it does).
+ * Wires the sync engine into the browser: fires on the `online` event, on window focus, right
+ * after a mutation is enqueued, and on a periodic backoff timer (grows while the queue isn't
+ * draining, resets to base once it does).
  * Returns a teardown function.
  */
 export function startSyncEngine(db: OfflineDb, endpoint = '/api/sync'): () => void {
@@ -102,12 +109,14 @@ export function startSyncEngine(db: OfflineDb, endpoint = '/api/sync'): () => vo
 
   window.addEventListener('online', trigger);
   window.addEventListener('focus', trigger);
+  window.addEventListener(SYNC_REQUEST_EVENT, trigger);
   timer = setTimeout(tick, backoffMs);
 
   return () => {
     stopped = true;
     window.removeEventListener('online', trigger);
     window.removeEventListener('focus', trigger);
+    window.removeEventListener(SYNC_REQUEST_EVENT, trigger);
     if (timer) clearTimeout(timer);
   };
 }
