@@ -296,7 +296,8 @@ export function retryConflictReview(
     }],
   });
 
-  if (outcome.status === 'rejected') {
+  // An unexpected server failure leaves the review open — it was not applied and can be retried.
+  if (outcome.status === 'rejected' || outcome.status === 'error') {
     throw new BusinessError(outcome.message);
   }
 

@@ -54,11 +54,13 @@ export const offlineDb = new OfflineDb();
  * assignment can't race with itself and can't half-happen — either both writes land or neither
  * does (same atomicity guarantee as a single `.add()`, just extended over the two tables).
  */
+export const SYNC_REQUEST_EVENT = 'dtc-sync-request';
+
 export async function enqueueMutation(
   db: OfflineDb,
   params: { endpoint: string; payload: unknown },
 ): Promise<QueuedMutation> {
-  return db.transaction('rw', db.mutations, db.meta, async () => {
+  const queued = await db.transaction('rw', db.mutations, db.meta, async () => {
     const counter = await db.meta.get('seq');
     const nextSeq = (counter?.value ?? 0) + 1;
     await db.meta.put({ key: 'seq', value: nextSeq });
@@ -76,4 +78,7 @@ export async function enqueueMutation(
     await db.mutations.add(mutation);
     return mutation;
   });
+  // Ask the sync engine to push now rather than on its next backoff tick (up to 60s away).
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(SYNC_REQUEST_EVENT));
+  return queued;
 }

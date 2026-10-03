@@ -46,7 +46,11 @@ export type IncomingMutation = {
 export type MutationOutcome =
   | { id: string; status: 'applied' }
   | { id: string; status: 'conflicted'; message: string; conflictReviewId?: string }
-  | { id: string; status: 'rejected'; message: string };
+  | { id: string; status: 'rejected'; message: string }
+  // Unexpected server failure (a bug, or SQLite busy). NOT written to the ledger, so the client
+  // keeps the mutation queued and a later retry can still apply it — but it no longer takes the
+  // rest of the batch down with it.
+  | { id: string; status: 'error'; message: string };
 
 /**
  * Routes a mutation's payload to its real business service by endpoint — reusing the existing,
@@ -288,7 +292,18 @@ function applyOneMutation(
     if (error instanceof BusinessError) {
       return recordConflict(db, orgId, actor, mutation, error);
     }
-    throw error; // genuinely unexpected — let the caller 500, don't mask a real bug as a conflict
+    // Genuinely unexpected — don't mask a real bug as a conflict, and don't ledger it (a retry
+    // after the fix must still apply). The transaction above already rolled back.
+    console.error('[sync] unexpected failure applying mutation', {
+      mutationId: mutation.id,
+      endpoint: mutation.endpoint,
+      error,
+    });
+    return {
+      id: mutation.id,
+      status: 'error',
+      message: error instanceof Error ? error.message : 'Unexpected server error',
+    };
   }
 }
 

@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { eq, and, isNull } from 'drizzle-orm';
 import { faultReports, syncMutations, conflictReviews, truckAssignments } from '../../db/schema';
 import { createTestDb } from '../../tests/helpers/testDb';
@@ -87,6 +87,45 @@ describe('sync.service — rule A: ack implies applied', () => {
     const reviews = db.select().from(conflictReviews).all();
     expect(reviews).toHaveLength(1);
     expect(reviews[0].kind).toBe('sync_conflict');
+  });
+});
+
+describe('sync.service — an unexpected failure does not take down the batch', () => {
+  it('a non-business throw fails only its own mutation (unledgered, retryable); the rest still apply', () => {
+    const { db } = createTestDb();
+    const { orgId, installerId } = seedBaseFixtures(db);
+    const truckId = createTruck(db, orgId, 'FZE810SY');
+    const deviceId = createDevice(db, orgId, { type: 'mother', serial: 'SYNC-ISOLATE-1', status: 'in_service' });
+    const payload = { truckId, deviceId, locksAffected: ['B'], description: 'device offline' };
+
+    // Fail the first fault_reports insert only, the way a SQLite constraint error would.
+    let failed = false;
+    const flakyDb = makeRecursiveFailureProxy(db, (table) => {
+      if (table !== faultReports || failed) return false;
+      failed = true;
+      return true;
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const outcomes = applySyncBatch(flakyDb, {
+      orgId,
+      actor: { id: installerId, orgId, role: 'installer' },
+      mutations: [faultMutation('mut-poison', 1, 1000, payload), faultMutation('mut-after', 2, 2000, payload)],
+    });
+
+    expect(outcomes.map((o) => o.status)).toEqual(['error', 'applied']);
+    expect(db.select().from(syncMutations).where(eq(syncMutations.clientMutationId, 'mut-poison')).get()).toBeUndefined();
+    expect(db.select().from(conflictReviews).all()).toHaveLength(0);
+
+    // Not ledgered, so the retry after the underlying fix genuinely applies.
+    const [retry] = applySyncBatch(db, {
+      orgId,
+      actor: { id: installerId, orgId, role: 'installer' },
+      mutations: [faultMutation('mut-poison', 1, 1000, payload)],
+    });
+    expect(retry.status).toBe('applied');
+    expect(db.select().from(faultReports).all()).toHaveLength(2);
+    vi.restoreAllMocks();
   });
 });
 
