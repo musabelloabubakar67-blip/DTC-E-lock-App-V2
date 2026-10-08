@@ -2,8 +2,6 @@ import { spawn } from 'node:child_process';
 import { existsSync, renameSync, rmSync } from 'node:fs';
 import Database from 'better-sqlite3';
 
-const port = process.env.PORT ?? '3000';
-
 validateProductionEnvironment();
 promoteBootstrapDatabase();
 
@@ -12,21 +10,6 @@ await run(process.execPath, [
   'node_modules/tsx/dist/cli.mjs',
   'db/migrate.ts',
 ]);
-
-const server = spawn(
-  process.execPath,
-  ['node_modules/next/dist/bin/next', 'start', '-H', '0.0.0.0', '-p', port],
-  { stdio: 'inherit', env: process.env },
-);
-
-for (const signal of ['SIGINT', 'SIGTERM']) {
-  process.on(signal, () => server.kill(signal));
-}
-
-server.on('exit', (code, signal) => {
-  if (signal) process.kill(process.pid, signal);
-  process.exit(code ?? 1);
-});
 
 function run(command, args) {
   return new Promise((resolve, reject) => {

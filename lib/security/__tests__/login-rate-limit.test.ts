@@ -5,6 +5,7 @@ import {
   loginAttemptKey,
   recordFailedLogin,
   resetLoginRateLimitForTests,
+  trackedLoginAttemptsForTests,
 } from '../login-rate-limit';
 
 describe('login rate limiting', () => {
@@ -35,5 +36,15 @@ describe('login rate limiting', () => {
   it('normalizes usernames without merging different addresses', () => {
     expect(loginAttemptKey('10.0.0.1', ' Musa ')).toBe('10.0.0.1:musa');
     expect(loginAttemptKey('10.0.0.2', 'MUSA')).not.toBe(loginAttemptKey('10.0.0.1', 'MUSA'));
+  });
+
+  it('prunes expired keys when new failures arrive', () => {
+    recordFailedLogin(loginAttemptKey('10.0.0.1', 'old-user'), 1_000);
+    recordFailedLogin(
+      loginAttemptKey('10.0.0.2', 'new-user'),
+      15 * 60 * 1000 + 1_001,
+    );
+
+    expect(trackedLoginAttemptsForTests()).toBe(1);
   });
 });
