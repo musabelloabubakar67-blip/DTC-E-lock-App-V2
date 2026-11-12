@@ -1,7 +1,7 @@
 import type { Database } from 'better-sqlite3';
 import { AuthzError } from '../lib/errors';
 import type { AuthenticatedUser } from './auth.service';
-import { requireSupervisor } from './auth.service';
+import { requireAuthenticated } from './auth.service';
 import { EXPORT_REPORTS, humanizeValue } from './export-reports';
 
 export type ExportFormat = 'csv' | 'json';
@@ -62,27 +62,28 @@ export type ExportSummary = {
 };
 
 export function listExportSummaries(sqlite: Database, actor: AuthenticatedUser): ExportSummary[] {
-  const supervisor = requireSupervisor(actor);
+  const user = requireAuthenticated(actor);
+  const isSupervisor = user.role === 'supervisor';
 
   return [
-    ...EXPORT_REPORTS.map((report) => ({
+    ...EXPORT_REPORTS.filter((report) => isSupervisor || report.installerVisible).map((report) => ({
       key: report.key,
       label: report.label,
       description: report.description,
       kind: 'report' as const,
-      rowCount: Number((sqlite.prepare(report.countSql).get({ org: supervisor.orgId }) as { count?: number } | undefined)?.count ?? 0),
+      rowCount: Number((sqlite.prepare(report.countSql).get({ org: user.orgId }) as { count?: number } | undefined)?.count ?? 0),
     })),
-    ...EXPORT_DATASETS.map((dataset) => ({
+    ...(isSupervisor ? EXPORT_DATASETS : []).map((dataset) => ({
       key: dataset.key,
       label: dataset.label,
       kind: 'raw' as const,
-      rowCount: countRows(sqlite, dataset, supervisor.orgId),
+      rowCount: countRows(sqlite, dataset, user.orgId),
     })),
   ];
 }
 
 export function buildExport(sqlite: Database, actor: AuthenticatedUser, input: { dataset: string; format: string }) {
-  const supervisor = requireSupervisor(actor);
+  const user = requireAuthenticated(actor);
   const report = EXPORT_REPORTS.find((entry) => entry.key === input.dataset);
   const dataset = EXPORT_DATASETS.find((entry) => entry.key === input.dataset);
   const format: ExportFormat = input.format === 'json' ? 'json' : 'csv';
@@ -90,13 +91,16 @@ export function buildExport(sqlite: Database, actor: AuthenticatedUser, input: {
   if (!report && !dataset) {
     throw new AuthzError('Unknown export dataset.');
   }
+  if (user.role !== 'supervisor' && !report?.installerVisible) {
+    throw new AuthzError('Supervisor role required');
+  }
 
   const rows = report
-    ? (sqlite.prepare(report.sql).all({ org: supervisor.orgId }) as Array<Record<string, unknown>>).map((row) => {
+    ? (sqlite.prepare(report.sql).all({ org: user.orgId }) as Array<Record<string, unknown>>).map((row) => {
       for (const column of report.humanize) row[column] = humanizeValue(row[column]);
       return row;
     })
-    : readRows(sqlite, dataset!, supervisor.orgId);
+    : readRows(sqlite, dataset!, user.orgId);
   const timestamp = report?.lagosDayOffset !== undefined
     ? lagosDate(report.lagosDayOffset)
     : new Date().toISOString().slice(0, 10);

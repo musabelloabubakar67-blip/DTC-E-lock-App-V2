@@ -2696,15 +2696,15 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
                 }
             }
             item { RegistryToolsPanel(state, model) }
-            item {
-                Panel("Data exports / ${settings?.exports?.size ?: 0}") {
-                    Text("Exports use the same organisation-scoped datasets and supervisor checks as the web app.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    settings?.exports?.forEach { export ->
-                        Row(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Column(Modifier.weight(1f)) { Text(export.label, style = MaterialTheme.typography.labelLarge); Text("${number(export.rowCount)} rows", color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                            TextButton(onClick = { model.exportData(export.key, "csv") }) { Text("CSV") }
-                            TextButton(onClick = { model.exportData(export.key, "json") }) { Text("JSON") }
-                        }
+        }
+        if (!settings?.exports.isNullOrEmpty()) item {
+            Panel("Data exports / ${settings?.exports?.size ?: 0}") {
+                Text(if (state.dashboard?.user?.role == "supervisor") "Exports use the same organisation-scoped datasets and supervisor checks as the web app." else "Daily installation reports for your organisation.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                settings?.exports?.forEach { export ->
+                    Row(Modifier.fillMaxWidth().border(BorderStroke(1.dp, MaterialTheme.colorScheme.outline)).padding(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) { Text(export.label, style = MaterialTheme.typography.labelLarge); Text("${number(export.rowCount)} rows", color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                        TextButton(onClick = { model.exportData(export.key, "csv") }) { Text("CSV") }
+                        TextButton(onClick = { model.exportData(export.key, "json") }) { Text("JSON") }
                     }
                 }
             }

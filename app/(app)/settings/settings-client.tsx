@@ -42,6 +42,8 @@ export default function SettingsClient({
   const [resetPasswordVisible, setResetPasswordVisible] = useState(false);
   const activeUsers = settings.users.filter((user) => user.isActive).length;
   const canManageUsers = currentRole === 'supervisor';
+  // Installers get only the reports the server marks installer-visible (the daily installations).
+  const reportSummaries = exportSummaries.filter((item) => item.kind === 'report');
   const currentUser = settings.users.find((user) => user.id === currentUserId) ?? null;
 
   return (
@@ -285,17 +287,21 @@ export default function SettingsClient({
           </Panel>
         </div>
 
-        {canManageUsers && (
+        {(canManageUsers || reportSummaries.length > 0) && (
           <div className="settings-layout__data" id="exports">
-            <h2 className="settings-group-heading">Registry tools</h2>
-            <IncompleteRegistrationPanel />
-            <BackfillRegistrationPanel />
-            <InstallationVerificationBackfillPanel />
+            {canManageUsers && (
+              <>
+                <h2 className="settings-group-heading">Registry tools</h2>
+                <IncompleteRegistrationPanel />
+                <BackfillRegistrationPanel />
+                <InstallationVerificationBackfillPanel />
+              </>
+            )}
             <h2 className="settings-group-heading">Data exports</h2>
             <Panel title="Reports" action={<FileSpreadsheet className="settings-panel-icon" aria-hidden="true" />}>
               <p className="settings-panel-copy">Readable reports with serials, plates, names and Lagos dates. CSV opens directly in Excel.</p>
               <div className="export-list" role="list">
-                {exportSummaries.filter((item) => item.kind === 'report').map((item) => (
+                {reportSummaries.map((item) => (
                   <article className="export-row" key={item.key} role="listitem">
                     <div className="export-card__body">
                       <strong>{item.label}</strong>
@@ -312,6 +318,7 @@ export default function SettingsClient({
                 ))}
               </div>
             </Panel>
+            {canManageUsers && (
             <details className="export-advanced">
               <summary>Advanced / backup: raw database tables</summary>
             <Panel title="Raw tables" action={<Database className="settings-panel-icon" aria-hidden="true" />}>
@@ -338,6 +345,7 @@ export default function SettingsClient({
               </div>
             </Panel>
             </details>
+            )}
           </div>
         )}
       </section>

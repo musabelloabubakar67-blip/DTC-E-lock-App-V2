@@ -13,6 +13,8 @@ export type ExportReport = {
   // Set on single-day reports: which Lagos day the rows cover (0 = today, -1 = yesterday), so the
   // download is named after that day rather than the server's UTC date.
   lagosDayOffset?: number;
+  // Installers can list and download this report too; every other export is supervisor-only.
+  installerVisible?: boolean;
 };
 
 const LAGOS = `'+1 hour'`;
@@ -122,6 +124,7 @@ export const EXPORT_REPORTS: ExportReport[] = [
     description: 'Installs logged so far today (Lagos time), same columns as Installations.',
     humanize: INSTALLATION_HUMANIZE,
     lagosDayOffset: 0,
+    installerVisible: true,
     countSql: `select count(*) as count from installation_logs il where il.org_id = @org and ${onLagosDay(0)}`,
     sql: installationsSql(onLagosDay(0)),
   },
@@ -131,6 +134,7 @@ export const EXPORT_REPORTS: ExportReport[] = [
     description: 'All installs logged yesterday (Lagos time), same columns as Installations.',
     humanize: INSTALLATION_HUMANIZE,
     lagosDayOffset: -1,
+    installerVisible: true,
     countSql: `select count(*) as count from installation_logs il where il.org_id = @org and ${onLagosDay(-1)}`,
     sql: installationsSql(onLagosDay(-1)),
   },

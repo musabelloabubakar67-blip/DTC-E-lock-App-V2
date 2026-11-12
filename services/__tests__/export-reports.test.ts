@@ -24,7 +24,11 @@ function setup() {
     subDeviceIds: kit.subDeviceIds as [string, string, string],
     company: 'mrs',
   });
-  return { sqlite, actor: { id: supervisorId, orgId, role: 'supervisor' as const } };
+  return {
+    sqlite,
+    actor: { id: supervisorId, orgId, role: 'supervisor' as const },
+    installer: { id: installerId, orgId, role: 'installer' as const },
+  };
 }
 
 describe('readable export reports', () => {
@@ -85,5 +89,19 @@ describe('readable export reports', () => {
     const yesterday = new Date(Date.now() + 3600_000 - 86400_000).toISOString().slice(0, 10);
     expect(buildExport(sqlite, actor, { dataset: 'installations_yesterday', format: 'csv' }).filename)
       .toBe(`dtc-installations-yesterday-${yesterday}.csv`);
+  });
+
+  it('gives installers only the daily installation reports', () => {
+    const { sqlite, installer } = setup();
+    expect(listExportSummaries(sqlite, installer).map((item) => item.key))
+      .toEqual(['installations_today', 'installations_yesterday']);
+
+    const [row] = JSON.parse(buildExport(sqlite, installer, { dataset: 'installations_today', format: 'json' }).body);
+    expect(row).toMatchObject({ Truck: 'FZE100DI' });
+    expect(() => buildExport(sqlite, installer, { dataset: 'installations_yesterday', format: 'csv' })).not.toThrow();
+
+    for (const key of ['installations', 'fleet_status', 'devices']) {
+      expect(() => buildExport(sqlite, installer, { dataset: key, format: 'csv' })).toThrow('Supervisor role required');
+    }
   });
 });
