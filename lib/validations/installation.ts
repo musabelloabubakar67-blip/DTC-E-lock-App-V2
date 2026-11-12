@@ -34,7 +34,9 @@ export const installKitSchema = z.object({
   // confirms it (leaves it) or changes it"). The server re-reads current state itself and only
   // writes truck_company_assignments when the submitted value actually differs (§6 "the server
   // does not trust a client-only 'no change' signal").
-  company: z.enum(['mrs', 'dangote'], { required_error: 'Serving company is required' }),
+  company: z.enum(['mrs', 'dangote'], {
+    error: (issue) => (issue.input === undefined ? 'Serving company is required' : undefined),
+  }),
   checklist: installChecklistSchema.optional(),
 });
 
