@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '../../../../lib/auth';
 import { db, sqlite } from '../../../../db';
 import { AuthzError } from '../../../../lib/errors';
-import { requireAuthenticated, requireSupervisor } from '../../../../services/auth.service';
+import { requireAuthenticated } from '../../../../services/auth.service';
 import { listExportSummaries } from '../../../../services/data-management.service';
 import {
   createSettingsUser,
@@ -25,9 +25,8 @@ export async function GET() {
   try {
     const { actor } = await actorFromSession();
     const settings = getSettingsData(db, actor, { mode: 'system', compactMode: false });
-    const exports = actor.role === 'supervisor'
-      ? listExportSummaries(sqlite, requireSupervisor(actor))
-      : [];
+    // Supervisors get every export; installers only the reports marked installerVisible.
+    const exports = listExportSummaries(sqlite, actor);
 
     const response = NextResponse.json({
       data: {

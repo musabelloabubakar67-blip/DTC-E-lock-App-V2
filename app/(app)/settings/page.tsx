@@ -3,7 +3,6 @@ import { getServerSession } from 'next-auth';
 import { redirect } from 'next/navigation';
 import { authOptions } from '../../../lib/auth';
 import { db, sqlite } from '../../../db';
-import { requireSupervisor } from '../../../services/auth.service';
 import { listExportSummaries } from '../../../services/data-management.service';
 import { getSettingsData, type AppearanceMode } from '../../../services/settings.service';
 import {
@@ -35,12 +34,11 @@ export default async function SettingsPage() {
   );
 
   const initialActionState: SettingsActionState = { status: 'idle' };
-  const exports = session.user.role === 'supervisor'
-    ? listExportSummaries(
-        sqlite,
-        requireSupervisor({ id: session.user.id, orgId: session.user.orgId, role: session.user.role }),
-      )
-    : [];
+  // Supervisors get every export; installers only the reports marked installerVisible.
+  const exports = listExportSummaries(
+    sqlite,
+    { id: session.user.id, orgId: session.user.orgId, role: session.user.role },
+  );
 
   return (
     <SettingsClient
