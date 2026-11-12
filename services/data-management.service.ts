@@ -97,12 +97,19 @@ export function buildExport(sqlite: Database, actor: AuthenticatedUser, input: {
       return row;
     })
     : readRows(sqlite, dataset!, supervisor.orgId);
-  const timestamp = new Date().toISOString().slice(0, 10);
+  const timestamp = report?.lagosDayOffset !== undefined
+    ? lagosDate(report.lagosDayOffset)
+    : new Date().toISOString().slice(0, 10);
   const filename = `dtc-${(report ?? dataset)!.key.replaceAll('_', '-')}-${timestamp}.${format}`;
   const body = format === 'json' ? JSON.stringify(rows, null, 2) : toCsv(rows);
   const contentType = format === 'json' ? 'application/json; charset=utf-8' : 'text/csv; charset=utf-8';
 
   return { body, contentType, filename };
+}
+
+// YYYY-MM-DD in Lagos (UTC+1, no DST), offset by whole days.
+function lagosDate(dayOffset: number): string {
+  return new Date(Date.now() + 3600_000 + dayOffset * 86400_000).toISOString().slice(0, 10);
 }
 
 function countRows(sqlite: Database, dataset: ExportDataset, orgId: string): number {
