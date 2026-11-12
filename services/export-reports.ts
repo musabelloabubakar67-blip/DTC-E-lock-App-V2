@@ -1,7 +1,7 @@
 // Human-readable reports: one row = one thing, serials/plates/names instead of internal ids,
 // Lagos local dates instead of unix seconds.
 
-export type ReportKey = 'fleet_status' | 'installations' | 'movements' | 'device_inventory' | 'registrations' | 'available_mothers' | 'faults';
+export type ReportKey = 'fleet_status' | 'installations' | 'installations_today' | 'installations_yesterday' | 'movements' | 'device_inventory' | 'registrations' | 'available_mothers' | 'faults';
 
 export type ExportReport = {
   key: ReportKey;
@@ -10,6 +10,9 @@ export type ExportReport = {
   sql: string;
   countSql: string;
   humanize: string[];
+  // Set on single-day reports: which Lagos day the rows cover (0 = today, -1 = yesterday), so the
+  // download is named after that day rather than the server's UTC date.
+  lagosDayOffset?: number;
 };
 
 const LAGOS = `'+1 hour'`;
@@ -42,6 +45,32 @@ const registeredCount = `(select count(*) from kit_members km where km.mother_de
 const latestVerification =(column: string) => `(
   select ${column} from verifications v where v.truck_id = t.id order by v.verified_at desc limit 1
 )`;
+
+const INSTALLATION_HUMANIZE = ['Result', 'Battery', 'Online after install'];
+
+// Install falls on a given Lagos calendar day, relative to today (0 = today, -1 = yesterday).
+const onLagosDay = (offset: number) =>
+  `strftime('%Y-%m-%d', il.logged_date, 'unixepoch', ${LAGOS}) = strftime('%Y-%m-%d', 'now', ${LAGOS}, '${offset} days')`;
+
+const installationsSql = (dayFilter?: string) => `
+      select
+        ${fmt('il.logged_date')} as "Date",
+        t.plate as "Truck",
+        u.display_name as "Installer",
+        m.serial as "Mother lock",
+        ${subAtInstall('B')} as "Sub-lock B",
+        ${subAtInstall('C')} as "Sub-lock C",
+        ${subAtInstall('D')} as "Sub-lock D",
+        il.overall_status as "Result",
+        il.battery_level as "Battery",
+        il.online_after as "Online after install",
+        il.issues_notes as "Issues noted"
+      from installation_logs il
+      join trucks t on t.id = il.truck_id
+      join devices m on m.id = il.mother_device_id
+      join users u on u.id = il.actor_user_id
+      where il.org_id = @org${dayFilter ? ` and ${dayFilter}` : ''}
+      order by il.logged_date desc`;
 
 export const EXPORT_REPORTS: ExportReport[] = [
   {
@@ -83,27 +112,27 @@ export const EXPORT_REPORTS: ExportReport[] = [
     key: 'installations',
     label: 'Installations',
     description: 'One row per install: date, truck, installer, the four serials and the checklist result.',
-    humanize: ['Result', 'Battery', 'Online after install'],
-    countSql: `select count(*) as count from installation_logs where org_id = @org`,
-    sql: `
-      select
-        ${fmt('il.logged_date')} as "Date",
-        t.plate as "Truck",
-        u.display_name as "Installer",
-        m.serial as "Mother lock",
-        ${subAtInstall('B')} as "Sub-lock B",
-        ${subAtInstall('C')} as "Sub-lock C",
-        ${subAtInstall('D')} as "Sub-lock D",
-        il.overall_status as "Result",
-        il.battery_level as "Battery",
-        il.online_after as "Online after install",
-        il.issues_notes as "Issues noted"
-      from installation_logs il
-      join trucks t on t.id = il.truck_id
-      join devices m on m.id = il.mother_device_id
-      join users u on u.id = il.actor_user_id
-      where il.org_id = @org
-      order by il.logged_date desc`,
+    humanize: INSTALLATION_HUMANIZE,
+    countSql: `select count(*) as count from installation_logs il where il.org_id = @org`,
+    sql: installationsSql(),
+  },
+  {
+    key: 'installations_today',
+    label: 'Installations — today',
+    description: 'Installs logged so far today (Lagos time), same columns as Installations.',
+    humanize: INSTALLATION_HUMANIZE,
+    lagosDayOffset: 0,
+    countSql: `select count(*) as count from installation_logs il where il.org_id = @org and ${onLagosDay(0)}`,
+    sql: installationsSql(onLagosDay(0)),
+  },
+  {
+    key: 'installations_yesterday',
+    label: 'Installations — yesterday',
+    description: 'All installs logged yesterday (Lagos time), same columns as Installations.',
+    humanize: INSTALLATION_HUMANIZE,
+    lagosDayOffset: -1,
+    countSql: `select count(*) as count from installation_logs il where il.org_id = @org and ${onLagosDay(-1)}`,
+    sql: installationsSql(onLagosDay(-1)),
   },
   {
     key: 'movements',
