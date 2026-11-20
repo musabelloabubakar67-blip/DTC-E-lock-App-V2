@@ -108,6 +108,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.runtime.key
@@ -129,8 +130,10 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -195,6 +198,8 @@ data class NativeUiState(
     val workflowDevice: String = "",
 )
 
+private const val RESUME_WINDOW_MS = 30 * 60 * 1000L
+
 class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) : ViewModel() {
     private var latestLookupRequestId = 0L
     private val _state = MutableStateFlow(
@@ -214,6 +219,7 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
                     val sync = if (restored != null) api.syncPending() else null
                     val dashboard = if (restored != null && (sync?.applied ?: 0) > 0) api.bootstrap() else restored
                     _state.update { it.copy(booting = false, dashboard = dashboard, pendingSyncCount = sync?.pending ?: api.pendingMutationCount()) }
+                    if (dashboard != null) resumeBackgroundScreen(dashboard)
                 } catch (error: Exception) {
                     _state.update { it.copy(booting = false, error = error.message) }
                 }
@@ -234,7 +240,25 @@ class DtcViewModel(private val api: DtcApi, private val demo: Boolean = false) :
         _state.update { it.copy(dashboard = dashboard, selected = AppScreen.Dashboard, pendingSyncCount = sync.pending, message = "Signed in") }
     }
 
+    // Back to the screen the user left if Android restarted the app within RESUME_WINDOW_MS of it
+    // going to the background; a later launch starts on the dashboard as before.
+    private fun resumeBackgroundScreen(dashboard: DashboardSnapshot) {
+        val saved = api.recentBackgroundScreen(RESUME_WINDOW_MS)
+        api.clearBackgroundScreen()
+        val screen = AppScreen.entries.firstOrNull { it.name == saved } ?: return
+        if (screen == AppScreen.Dashboard) return
+        if (screen == AppScreen.Review && dashboard.user.role != "supervisor") return
+        open(screen)
+    }
+
+    fun onBackgrounded() {
+        if (demo) return
+        val current = _state.value
+        if (current.dashboard != null) api.saveBackgroundScreen(current.selected.name)
+    }
+
     fun logout() {
+        api.clearBackgroundScreen()
         api.logout()
         _state.update { NativeUiState(booting = false, themeMode = it.themeMode) }
     }
@@ -660,6 +684,7 @@ fun DtcNativeApp(demo: Boolean = false) {
     }
     val model: DtcViewModel = viewModel(factory = factory)
     val state by model.state.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { model.onBackgrounded() }
 
     DtcTheme(state.themeMode) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
@@ -697,7 +722,7 @@ private fun LoadingScreen(label: String) {
 
 @Composable
 private fun LoginScreen(working: Boolean, error: String?, login: (String, String) -> Unit) {
-    var username by remember { mutableStateOf("") }
+    var username by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var visible by remember { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().padding(20.dp)) {
@@ -755,7 +780,7 @@ private fun LoginScreen(working: Boolean, error: String?, login: (String, String
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun NativeWorkspace(state: NativeUiState, model: DtcViewModel) {
-    var moreOpen by remember { mutableStateOf(false) }
+    var moreOpen by rememberSaveable { mutableStateOf(false) }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val layout = when {
             maxWidth >= 900.dp -> NativeLayout.WideTablet
@@ -1323,20 +1348,20 @@ private data class RegistrationSessionRow(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
-    var query by remember { mutableStateOf("") }
-    var mother by remember { mutableStateOf("") }
-    var subs by remember { mutableStateOf(listOf("", "", "")) }
-    var sim by remember { mutableStateOf("") }
-    var config by remember { mutableStateOf(mapOf("ipConfigured" to "yes", "apnConfigured" to "yes", "apnAuthSet" to "yes", "btWriteDone" to "yes")) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var mother by rememberSaveable { mutableStateOf("") }
+    var subs by rememberSaveable { mutableStateOf(listOf("", "", "")) }
+    var sim by rememberSaveable { mutableStateOf("") }
+    var config by rememberSaveable { mutableStateOf(mapOf("ipConfigured" to "yes", "apnConfigured" to "yes", "apnAuthSet" to "yes", "btWriteDone" to "yes")) }
     var session by remember { mutableStateOf(listOf<RegistrationSessionRow>()) }
     var selected by remember { mutableStateOf(setOf<String>()) }
-    var releaseNote by remember { mutableStateOf("") }
-    var archiveOpen by remember { mutableStateOf(false) }
-    var formOpen by remember { mutableStateOf(true) }
+    var releaseNote by rememberSaveable { mutableStateOf("") }
+    var archiveOpen by rememberSaveable { mutableStateOf(false) }
+    var formOpen by rememberSaveable { mutableStateOf(true) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
-    var ownershipFilter by remember { mutableStateOf("all") }
-    var registryAscending by remember { mutableStateOf(true) }
+    var ownershipFilter by rememberSaveable { mutableStateOf("all") }
+    var registryAscending by rememberSaveable { mutableStateOf(true) }
     var expandedRegistry by remember { mutableStateOf(setOf<String>()) }
 
     val effectiveRegistryQuery = remember(query, ownershipFilter) {
@@ -1497,12 +1522,12 @@ private fun RegisterParityScreen(state: NativeUiState, model: DtcViewModel) {
 
 @Composable
 private fun RegisterScreen(state: NativeUiState, model: DtcViewModel) {
-    var query by remember { mutableStateOf("") }
-    var mother by remember { mutableStateOf("") }
-    var sim by remember { mutableStateOf("") }
-    var subs by remember { mutableStateOf(listOf("", "", "")) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var mother by rememberSaveable { mutableStateOf("") }
+    var sim by rememberSaveable { mutableStateOf("") }
+    var subs by rememberSaveable { mutableStateOf(listOf("", "", "")) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
-    var showForm by remember { mutableStateOf(true) }
+    var showForm by rememberSaveable { mutableStateOf(true) }
     LaunchedEffect(query) { delay(350); model.loadRegistry(query) }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Inventory intake", "Register", "Kit", number(state.registryTotal), "Create an unassigned four-lock kit and keep the full registry searchable.") }
@@ -1563,21 +1588,21 @@ private fun RegistryArchive(state: NativeUiState, query: String, search: (String
 @Composable
 private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
     val context = LocalContext.current
-    var truck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
-    var company by remember { mutableStateOf("") }
-    var mother by remember { mutableStateOf("") }
-    var subs by remember { mutableStateOf(listOf("", "", "")) }
-    var mode by remember { mutableStateOf("changed") }
-    var loadedTruck by remember { mutableStateOf("") }
-    var checklist by remember { mutableStateOf(mapOf<String, String>()) }
-    var query by remember { mutableStateOf("") }
-    var archiveOpen by remember { mutableStateOf(false) }
-    var workbenchOpen by remember { mutableStateOf(true) }
+    var truck by rememberSaveable(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
+    var company by rememberSaveable { mutableStateOf("") }
+    var mother by rememberSaveable { mutableStateOf("") }
+    var subs by rememberSaveable { mutableStateOf(listOf("", "", "")) }
+    var mode by rememberSaveable { mutableStateOf("changed") }
+    var loadedTruck by rememberSaveable { mutableStateOf("") }
+    var checklist by rememberSaveable { mutableStateOf(mapOf<String, String>()) }
+    var query by rememberSaveable { mutableStateOf("") }
+    var archiveOpen by rememberSaveable { mutableStateOf(false) }
+    var workbenchOpen by rememberSaveable { mutableStateOf(true) }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var scanError by remember { mutableStateOf<String?>(null) }
     var shareReady by remember { mutableStateOf(false) }
-    var historyFilter by remember { mutableStateOf("all") }
-    var historyNewestFirst by remember { mutableStateOf(true) }
+    var historyFilter by rememberSaveable { mutableStateOf("all") }
+    var historyNewestFirst by rememberSaveable { mutableStateOf(true) }
     var expandedInstallations by remember { mutableStateOf(setOf<String>()) }
     val listState = rememberLazyListState()
 
@@ -1822,12 +1847,12 @@ private fun InstallParityScreen(state: NativeUiState, model: DtcViewModel) {
 @Composable
 private fun InstallScreen(state: NativeUiState, model: DtcViewModel) {
     val context = LocalContext.current
-    var query by remember { mutableStateOf("") }
-    var truck by remember { mutableStateOf("") }
-    var mother by remember { mutableStateOf("") }
-    var subs by remember { mutableStateOf(listOf("", "", "")) }
-    var company by remember { mutableStateOf("mrs") }
-    var status by remember { mutableStateOf("successful") }
+    var query by rememberSaveable { mutableStateOf("") }
+    var truck by rememberSaveable { mutableStateOf("") }
+    var mother by rememberSaveable { mutableStateOf("") }
+    var subs by rememberSaveable { mutableStateOf(listOf("", "", "")) }
+    var company by rememberSaveable { mutableStateOf("mrs") }
+    var status by rememberSaveable { mutableStateOf("successful") }
     var scanTarget by remember { mutableStateOf<Int?>(null) }
     var shareReady by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
@@ -1913,8 +1938,8 @@ private fun InstallationArchive(state: NativeUiState, query: String, search: (St
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
-    var truck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
-    var requestedTruck by remember(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
+    var truck by rememberSaveable(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
+    var requestedTruck by rememberSaveable(state.workflowTruck) { mutableStateOf(state.workflowTruck) }
     var selected by remember { mutableStateOf(setOf<String>()) }
     var modes by remember {
         mutableStateOf(mapOf("mother" to "replace", "B" to "replace", "C" to "replace", "D" to "replace"))
@@ -1922,9 +1947,9 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
     var replacements by remember {
         mutableStateOf(mapOf("mother" to "", "B" to "", "C" to "", "D" to ""))
     }
-    var reason by remember { mutableStateOf("faulty") }
-    var description by remember { mutableStateOf("") }
-    var notes by remember { mutableStateOf("") }
+    var reason by rememberSaveable { mutableStateOf("faulty") }
+    var description by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     var scanTarget by remember { mutableStateOf<String?>(null) }
 
     val loadedKit = state.lookup?.takeIf {
@@ -2114,7 +2139,7 @@ private fun RepairsScreen(state: NativeUiState, model: DtcViewModel) {
 
 @Composable
 private fun LookupScreen(result: LookupSnapshot?, lookup: (String) -> Unit) {
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = PageEndPadding)) {
         item { PageHeader("Asset intelligence", "Asset", "Lookup", "01", "Search by truck plate or mother-lock serial.") }
         item {
@@ -2156,7 +2181,7 @@ private fun LookupKit(result: LookupSnapshot, modifier: Modifier = Modifier) = P
 
 @Composable
 private fun LookupParityScreen(state: NativeUiState, model: DtcViewModel) {
-    var query by remember { mutableStateOf("") }
+    var query by rememberSaveable { mutableStateOf("") }
     var recent by remember { mutableStateOf(listOf<String>()) }
     val result = state.lookup
     var correctionCompany by remember(result?.targetId) { mutableStateOf(result?.company?.lowercase()?.takeIf { result.companyDeclared }.orEmpty()) }
@@ -2443,7 +2468,7 @@ private fun ReviewScreen(state: NativeUiState, model: DtcViewModel) {
 
 @Composable
 private fun ReviewDialog(review: ReviewItem, canDecide: Boolean, onDismiss: () -> Unit, action: (String, String) -> Unit) {
-    var notes by remember { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(review.title.ifBlank { review.kind.replace('_', ' ') }) },
@@ -2552,7 +2577,7 @@ private fun AppearancePanel(state: NativeUiState, model: DtcViewModel, modifier:
 
 @Composable
 private fun ProfilePanel(state: NativeUiState, model: DtcViewModel, modifier: Modifier = Modifier) = Panel("Profile", modifier) {
-    var changing by remember { mutableStateOf(false) }
+    var changing by rememberSaveable { mutableStateOf(false) }
     var current by remember { mutableStateOf("") }
     var next by remember { mutableStateOf("") }
     var confirm by remember { mutableStateOf("") }
@@ -2580,13 +2605,13 @@ private fun ProfilePanel(state: NativeUiState, model: DtcViewModel, modifier: Mo
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
-    var addOpen by remember { mutableStateOf(false) }
-    var username by remember { mutableStateOf("") }
-    var displayName by remember { mutableStateOf("") }
+    var addOpen by rememberSaveable { mutableStateOf(false) }
+    var username by rememberSaveable { mutableStateOf("") }
+    var displayName by rememberSaveable { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var passwordVisible by remember { mutableStateOf(false) }
-    var role by remember { mutableStateOf("installer") }
-    var company by remember { mutableStateOf("") }
+    var role by rememberSaveable { mutableStateOf("installer") }
+    var company by rememberSaveable { mutableStateOf("") }
     var resetUserId by remember { mutableStateOf<String?>(null) }
     var resetUserName by remember { mutableStateOf("") }
     var resetPassword by remember { mutableStateOf("") }
@@ -2714,18 +2739,18 @@ private fun SettingsParityScreen(state: NativeUiState, model: DtcViewModel) {
 
 @Composable
 private fun RegistryToolsPanel(state: NativeUiState, model: DtcViewModel) {
-    var incompleteMother by remember { mutableStateOf("") }
-    var incompleteSim by remember { mutableStateOf("") }
-    var incompleteSubB by remember { mutableStateOf("") }
-    var incompleteSubC by remember { mutableStateOf("") }
-    var incompleteSubD by remember { mutableStateOf("") }
-    var incompleteNotes by remember { mutableStateOf("") }
+    var incompleteMother by rememberSaveable { mutableStateOf("") }
+    var incompleteSim by rememberSaveable { mutableStateOf("") }
+    var incompleteSubB by rememberSaveable { mutableStateOf("") }
+    var incompleteSubC by rememberSaveable { mutableStateOf("") }
+    var incompleteSubD by rememberSaveable { mutableStateOf("") }
+    var incompleteNotes by rememberSaveable { mutableStateOf("") }
 
-    var backfillMother by remember { mutableStateOf("") }
-    var backfillSubB by remember { mutableStateOf("") }
-    var backfillSubC by remember { mutableStateOf("") }
-    var backfillSubD by remember { mutableStateOf("") }
-    var backfillNotes by remember { mutableStateOf("") }
+    var backfillMother by rememberSaveable { mutableStateOf("") }
+    var backfillSubB by rememberSaveable { mutableStateOf("") }
+    var backfillSubC by rememberSaveable { mutableStateOf("") }
+    var backfillSubD by rememberSaveable { mutableStateOf("") }
+    var backfillNotes by rememberSaveable { mutableStateOf("") }
 
     Panel("Registry tools") {
         Text(

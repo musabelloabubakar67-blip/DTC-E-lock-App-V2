@@ -157,12 +157,25 @@ class DtcApi(private val context: Context) {
     private val baseUrl = BuildConfig.API_BASE_URL.trimEnd('/')
     private val appearance = context.getSharedPreferences("dtc_native_appearance", Context.MODE_PRIVATE)
     private val mutationStore = context.getSharedPreferences("dtc_native_mutations", Context.MODE_PRIVATE)
+    private val navigation = context.getSharedPreferences("dtc_native_navigation", Context.MODE_PRIVATE)
 
     fun appearanceMode(): String = appearance.getString("theme", "Dark") ?: "Dark"
     fun compactMode(): Boolean = appearance.getBoolean("compact", false)
     fun setAppearance(mode: String, compact: Boolean) {
         appearance.edit().putString("theme", mode).putBoolean("compact", compact).apply()
     }
+
+    // Android may kill the app while it is in the background. The screen the user left is saved
+    // when the app goes to the background, so a restart soon afterwards can return to it.
+    fun saveBackgroundScreen(screen: String) {
+        navigation.edit().putString("screen", screen).putLong("at", System.currentTimeMillis()).apply()
+    }
+    fun recentBackgroundScreen(maxAgeMs: Long): String? {
+        val savedAt = navigation.getLong("at", 0L)
+        if (System.currentTimeMillis() - savedAt > maxAgeMs) return null
+        return navigation.getString("screen", null)
+    }
+    fun clearBackgroundScreen() = navigation.edit().clear().apply()
 
     suspend fun restoreSession(): DashboardSnapshot? = try {
         bootstrap()
