@@ -1,4 +1,5 @@
-// NextAuth config: credentials provider, bcrypt-verified, 30-day session (§4 Auth).
+// NextAuth config: credentials provider, bcrypt-verified, 30-day sliding session (§4 Auth; renewed
+// by middleware.ts, see lib/auth-session/renew.ts).
 // Server-verified only — actor_user_id for services always comes from the session (§6 Actor & authority),
 // routes must strip any client-supplied actor before calling a service.
 import type { NextAuthOptions } from 'next-auth';
@@ -13,8 +14,8 @@ import {
   loginAttemptKey,
   recordFailedLogin,
 } from './security/login-rate-limit';
+import { SECURE_COOKIES, SESSION_MAX_AGE_SECONDS } from './auth-session/config';
 
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 7;
 const DUMMY_PASSWORD_HASH = '$2a$10$7EqJtq98hPqEX7fNZaFWoO5uT6uO5sFl0hgsoL4uMn6GywS6aP8mK';
 
 function requestIp(headers: Record<string, string | string[] | undefined> | undefined) {
@@ -29,7 +30,7 @@ function requestIp(headers: Record<string, string | string[] | undefined> | unde
 
 export const authOptions: NextAuthOptions = {
   session: { strategy: 'jwt', maxAge: SESSION_MAX_AGE_SECONDS },
-  useSecureCookies: process.env.NODE_ENV === 'production',
+  useSecureCookies: SECURE_COOKIES,
   pages: { signIn: '/login' },
   providers: [
     CredentialsProvider({
